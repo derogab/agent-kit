@@ -1,9 +1,14 @@
 {
+  "description": "Plays OS-native sound alerts on Claude Code events",
   "hooks": {
     "Notification": [
       {
-        "type": "command",
-        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh"
+          }
+        ]
       }
     ]
   }
