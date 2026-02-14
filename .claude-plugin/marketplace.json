@@ -20,6 +20,18 @@
         "./skills/commit",
         "./skills/pr"
       ]
+    },
+    {
+      "name": "sounds",
+      "source": "./plugins/sounds",
+      "category": "development",
+      "description": "Plays OS-native sound alerts on Claude Code events like task completion and errors, supporting both macOS and Linux",
+      "version": "0.1.0",
+      "author": {
+        "name": "Gabriele De Rosa"
+      },
+      "repository": "https://github.com/derogab/agent-kit",
+      "keywords": ["alerts", "sounds"]
     }
   ]
 }

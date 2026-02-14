@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "type": "command",
+        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh"
+      }
+    ]
+  }
+}
