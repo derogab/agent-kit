@@ -1,0 +1,25 @@
+{
+  "name": "agent-kit",
+  "description": "Directory of Claude Code plugins by @derogab",
+  "owner": {
+    "name": "Gabriele De Rosa"
+  },
+  "plugins": [
+    {
+      "name": "git",
+      "source": "./",
+      "category": "development",
+      "description": "Collection of skills able to manage GIT repositories by doing commits and PRs",
+      "version": "0.1.0",
+      "author": {
+        "name": "Gabriele De Rosa"
+      },
+      "repository": "https://github.com/derogab/agent-kit",
+      "keywords": ["coding", "development", "git"],
+      "skills": [
+        "./skills/commit",
+        "./skills/pr"
+      ]
+    }
+  ]
+}
