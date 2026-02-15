@@ -2,14 +2,14 @@
 name: pr
 description: Create or update a pull request for the current branch with a summary of all changes.
 disable-model-invocation: true
-allowed-tools: Bash(git diff:*) Bash(git log:*) Bash(git branch:*) Bash(git push:*) Bash(gh pr list:*) Bash(gh pr create:*) Bash(gh pr edit:*)
+allowed-tools: Bash(git diff:*) Bash(git log:*) Bash(git branch:*) Bash(git push:*) Bash(gh pr view:*) Bash(gh pr create:*) Bash(gh pr edit:*)
 ---
 
 ## Context
 
 - Current branch: !`git branch --show-current`
 - Commits on this branch (since main): !`git log --oneline main..HEAD`
-- PR for this branch: !`gh pr list --head "$(git branch --show-current)" --json number,title,url --limit 1 2>/dev/null || echo "NO_PR"`
+- PR for this branch: !`gh pr view --json number,title,url 2>/dev/null || echo "NO_PR"`
 
 ## Your task
 
@@ -29,8 +29,8 @@ Create or update a pull request for the current branch.
 
 ### Decide: create or update
 
-- If the list above is empty (`[]`) or shows `NO_PR` → **create** a new PR.
-- If a PR is listed for the current branch → **update** that PR.
+- If the PR context above shows `NO_PR` → **create** a new PR.
+- If a PR is found for the current branch → **update** that PR.
 
 ### PR title
 
