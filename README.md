@@ -4,30 +4,16 @@ A collection of plugins, skills, agents, and hooks for code agents (e.g. Claude 
 
 ## What's included
 
-### Skills
-Follows the [Agent Skills](https://agentskills.io) open standard.
+| | Claude Code | OpenCode |
+|-------|-------------|----------|
+| [Plugins](./plugins/) | ✅ | ❌ |
+| [Skills](./skills/) | ✅ | ✅ |
 
-| Skill | Description |
-|-------|-------------|
-| `/commit` | Create a conventional commit from staged changes |
-| `/pr` | Create or update a pull request for the current branch |
+### [Plugins](./plugins/)
 
-## Install
+See the [plugins documentation](./plugins/) for the full list.
 
-### Claude Code
+### [Skills](./skills/)
 
-Add the marketplace and install the plugin:
+See the [skills documentation](./skills/) for the full list.
 
-```bash
-claude plugin marketplace add derogab/agent-kit
-claude plugin install git@agent-kit
-```
-
-### OpenCode
-
-Symlink the skills into your personal skills folder:
-
-```bash
-ln -s /path/to/agent-kit/skills/commit ~/.config/opencode/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.config/opencode/skills/pr
-```
