@@ -1,9 +1,7 @@
 #!/bin/bash
 # Sound effects
 # Plays OS-native sounds for different events
-# Credits: https://www.claudedirectory.org/hooks/claudio
-
-EVENT_TYPE="$1"
+# Inspired to https://www.claudedirectory.org/hooks/claudio
 
 play_sound() {
   local sound_name="$1"
@@ -11,10 +9,10 @@ play_sound() {
   # macOS
   if [[ "$OSTYPE" == "darwin"* ]]; then
     case "$sound_name" in
-      "success") afplay /System/Library/Sounds/Glass.aiff ;;
+      "task_complete") afplay /System/Library/Sounds/Tink.aiff ;;
+      "session_end") afplay /System/Library/Sounds/Frog.aiff ;;
       "error") afplay /System/Library/Sounds/Basso.aiff ;;
       "notification") afplay /System/Library/Sounds/Pop.aiff ;;
-      *) afplay /System/Library/Sounds/Tink.aiff ;;
     esac
   fi
 
@@ -22,7 +20,8 @@ play_sound() {
   if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     if command -v paplay &> /dev/null; then
       case "$sound_name" in
-        "success") paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null ;;
+        "task_complete") paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null ;;
+        "session_end") paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null ;;
         "error") paplay /usr/share/sounds/freedesktop/stereo/dialog-error.oga 2>/dev/null ;;
         "notification") paplay /usr/share/sounds/freedesktop/stereo/message.oga 2>/dev/null ;;
       esac
@@ -30,8 +29,4 @@ play_sound() {
   fi
 }
 
-case "$EVENT_TYPE" in
-  "task_complete") play_sound "success" ;;
-  "error") play_sound "error" ;;
-  *) play_sound "notification" ;;
-esac
+play_sound $1

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh notification"
           }
         ]
       }
@@ -17,6 +17,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh task_complete"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh session_end"
           }
         ]
       }
