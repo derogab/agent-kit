@@ -1,6 +1,6 @@
 # git
 
-A Claude Code plugin that provides Git workflow skills for creating commits and managing pull requests following the Conventional Commits specification.
+A plugin that provides Git workflow skills for creating commits and managing pull requests following the Conventional Commits specification.
 
 ## Skills
 
@@ -13,11 +13,11 @@ See the [skills documentation](../../skills/) for more details.
 
 ## Install
 
-### OpenCode
+### Universal
 
 ```bash
-ln -s /path/to/agent-kit/skills/commit ~/.config/opencode/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.config/opencode/skills/pr
+npx skills add -g -y derogab/agent-kit@commit
+npx skills add -g -y derogab/agent-kit@pr
 ```
 
 ### Claude Code
@@ -25,32 +25,4 @@ ln -s /path/to/agent-kit/skills/pr ~/.config/opencode/skills/pr
 ```bash
 claude plugin marketplace add derogab/agent-kit
 claude plugin install git@agent-kit
-```
-
-### Codex CLI
-
-```bash
-ln -s /path/to/agent-kit/skills/commit ~/.codex/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.codex/skills/pr
-```
-
-### Cursor
-
-```bash
-ln -s /path/to/agent-kit/skills/commit ~/.cursor/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.cursor/skills/pr
-```
-
-### Gemini CLI
-
-```bash
-ln -s /path/to/agent-kit/skills/commit ~/.gemini/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.gemini/skills/pr
-```
-
-### Antigravity
-
-```bash
-ln -s /path/to/agent-kit/skills/commit ~/.gemini/antigravity/skills/commit
-ln -s /path/to/agent-kit/skills/pr ~/.gemini/antigravity/skills/pr
 ```
