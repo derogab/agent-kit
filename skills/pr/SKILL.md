@@ -66,6 +66,6 @@ When **updating**, keep the existing title unless it is generic (e.g. "Update"),
 
 - Write the summary in plain English, focusing on the **why** and the **what**.
 - List changes as concise bullet points. Group related items under sub-headers if the PR touches multiple areas.
-- The test plan should contain actionable verification steps relevant to the changes.
+- The test plan should contain actionable verification steps relevant to the changes. If a check was already run and passed, mark it as done.
 - Use a HEREDOC to pass the body to `gh pr create` or `gh pr edit`.
 - Do not send any text besides the tool calls.
