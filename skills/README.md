@@ -6,6 +6,7 @@ Follows the [Agent Skills](https://agentskills.io) open standard.
 |-------|-------------|
 | [`/commit`](./commit/) | Create a conventional commit from staged changes |
 | [`/pr`](./pr/) | Create or update a pull request for the current branch |
+| [`/review-council`](./review-council/) | Orchestrate a full code review across all available reviewers |
 
 ## Install
 

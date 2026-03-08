@@ -2,6 +2,7 @@
 
 | Plugin | Description |
 |--------|-------------|
+| [dev](./dev/) | Skills to help with everyday development tasks |
 | [git](./git/) | Git workflow skills for commits and pull requests |
 | [sounds](./sounds/) | OS-native sound alerts on events like task completion |
 
