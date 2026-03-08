@@ -1,6 +1,7 @@
 ---
 name: review-council
 description: Run all code review tools in parallel and aggregate results into a comprehensive review report.
+disable-model-invocation: true
 ---
 
 ## Context
