@@ -2,13 +2,13 @@
 name: pr
 description: Create or update a pull request for the current branch with a summary of all changes.
 disable-model-invocation: true
-allowed-tools: Bash(git diff:*) Bash(git log:*) Bash(git branch:*) Bash(git push:*) Bash(gh pr view:*) Bash(gh pr create:*) Bash(gh pr edit:*)
 ---
 
 ## Context
 
 - Current branch: !`git branch --show-current`
-- Commits on this branch (since main): !`git log --oneline main..HEAD`
+- Base branch: !`git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master`
+- Commits on this branch (since base): !`BASE=$(git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master) && git log --oneline $BASE..HEAD`
 - PR for this branch: !`gh pr view --json number,title,url 2>/dev/null || echo "NO_PR"`
 
 ## Your task
@@ -17,14 +17,14 @@ Create or update a pull request for the current branch.
 
 ### Pre-flight checks
 
-1. If the current branch is `main`, stop and tell the user to switch to a branch first. Do nothing else.
-2. If there are **no commits** ahead of main, stop and tell the user to commit changes first. Do nothing else.
+1. If the current branch is the base branch, stop and tell the user to switch to a feature branch first. Do nothing else.
+2. If there are **no commits** ahead of the base branch, stop and tell the user to commit changes first. Do nothing else.
 3. Never run `git add` or `git commit`. Only manage the PR.
 
 ### Analysis
 
-1. Run `git diff main...HEAD` to get the full diff of all changes on this branch.
-2. Run `git log main..HEAD --format="%h %s"` to get all commit messages.
+1. Run `git diff <base>...HEAD` to get the full diff of all changes on this branch.
+2. Run `git log <base>..HEAD --format="%h %s"` to get all commit messages.
 3. Identify the **main topic**, group **specific changes** logically.
 
 ### Decide: create or update

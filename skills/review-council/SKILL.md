@@ -6,7 +6,7 @@ description: Run all code review tools in parallel and aggregate results into a 
 ## Context
 
 - Current branch: !`git branch --show-current`
-- Base branch: !`git log --oneline main..HEAD 2>/dev/null && echo main || echo master`
+- Base branch: !`git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master`
 - Arguments: $ARGUMENTS
 
 ## Your task

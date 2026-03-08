@@ -2,7 +2,6 @@
 name: commit
 description: Create a git commit following the Conventional Commits specification.
 disable-model-invocation: true
-allowed-tools: Bash(git diff:*) Bash(git branch:*) Bash(git log:*) Bash(git commit:*)
 ---
 
 ## Context

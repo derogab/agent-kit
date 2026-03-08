@@ -10,7 +10,7 @@
       "source": "./",
       "category": "development",
       "description": "Collection of skills able to manage GIT repositories by doing commits and PRs",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Gabriele De Rosa"
       },
