@@ -1,6 +1,6 @@
 # git
 
-A plugin that provides Git workflow skills for creating commits and managing pull requests following the Conventional Commits specification.
+A collection of skills to help with everyday Git tasks.
 
 ## Skills
 
@@ -8,6 +8,7 @@ A plugin that provides Git workflow skills for creating commits and managing pul
 |-------|-------------|
 | `/commit` | Create a conventional commit from staged changes |
 | `/pr` | Create or update a pull request for the current branch |
+| `/worktree` | Resolve missing gitignored files in a git worktree via symlinks |
 
 See the [skills documentation](../../skills/) for more details.
 
@@ -18,6 +19,7 @@ See the [skills documentation](../../skills/) for more details.
 ```bash
 npx skills add -g -y derogab/agent-kit@commit
 npx skills add -g -y derogab/agent-kit@pr
+npx skills add -g -y derogab/agent-kit@worktree
 ```
 
 ### Claude Code
