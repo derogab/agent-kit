@@ -70,5 +70,5 @@ Wait for all sub-agents to complete. Produce a single report:
 - If multiple reviewers flag the same issue (same file, same line, same concern), merge them into one entry and note all reviewers that caught it.
 - If reviewers disagree on severity, use the highest. Severity ranking: Critical > Important > Minor.
 - If 3+ reviewers flag the same issue, mark it with `[CONSENSUS]`.
-- Preserve each reviewer's original output verbatim in the Detailed Reviews section.
+- Include the full review output in the Detailed Reviews section, but redact any credentials, secrets, API keys, tokens, or passwords that may appear in the output.
 - Keep Critical Issues short and focused on what MUST be addressed before merging.
