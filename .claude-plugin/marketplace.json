@@ -8,9 +8,10 @@
     {
       "name": "git",
       "source": "./",
+      "strict": false,
       "category": "development",
       "description": "Collection of skills to help with everyday Git tasks",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "author": {
         "name": "Gabriele De Rosa"
       },
@@ -25,9 +26,10 @@
     {
       "name": "dev",
       "source": "./",
+      "strict": false,
       "category": "development",
       "description": "Collection of skills to help with everyday development tasks",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Gabriele De Rosa"
       },
