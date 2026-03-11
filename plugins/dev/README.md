@@ -6,6 +6,7 @@ A plugin that provides skills to help with everyday development tasks.
 
 | Skill | Description |
 |-------|-------------|
+| `/redis` | Read the Redis Patterns for Coding Agents documentation before answering Redis questions or making Redis changes |
 | `/review-council` | Orchestrate a full code review across all available reviewers |
 
 See the [skills documentation](../../skills/) for more details.
@@ -15,6 +16,7 @@ See the [skills documentation](../../skills/) for more details.
 ### Universal
 
 ```bash
+npx skills add -g -y derogab/agent-kit@redis
 npx skills add -g -y derogab/agent-kit@review-council
 ```
 
