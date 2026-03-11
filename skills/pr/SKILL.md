@@ -7,8 +7,8 @@ disable-model-invocation: true
 ## Context
 
 - Current branch: !`git branch --show-current`
-- Base branch: !`git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master`
-- Commits on this branch (since base): !`BASE=$(git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master) && git log --oneline $BASE..HEAD`
+- Base branch: !`if git rev-parse --verify main >/dev/null 2>&1; then echo main; else echo master; fi`
+- Commits on this branch (since base): !`if git rev-parse --verify main >/dev/null 2>&1; then git log --oneline main..HEAD; else git log --oneline master..HEAD; fi`
 - PR for this branch: !`gh pr view --json number,title,url 2>/dev/null || echo "NO_PR"`
 
 ## Your task
