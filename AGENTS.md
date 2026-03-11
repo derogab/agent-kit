@@ -9,6 +9,12 @@ This repository contains reusable plugins and skills for code agents.
 - `plugins/`: agent plugins
 - `skills/`: reusable skills
 
+## Skill Location
+
+- Create the real skill in `skills/<skill-name>/`.
+- If the skill is inside a plugin, add a relative symlink at `plugins/<plugin>/skills/<skill-name>` that points to the shared skill directory.
+- Do not duplicate skill files inside a plugin. Plugins should reference skills through relative symlinks so the skill stays defined in one place.
+
 ## Supported Install Paths
 
 - When editing install or release docs, keep the two main install paths aligned: universal skills install and Claude Code marketplace/plugins install.
