@@ -20,6 +20,7 @@ This repository contains reusable plugins and skills for code agents.
 
 - Keep changes small and focused.
 - Follow the existing structure and wording style.
+- Skills must follow the official Agent Skills specification: `https://agentskills.io/specification`.
 - Prefer simple Markdown.
 - Update nearby docs when behavior or usage changes.
 - Do not add unrelated changes.
