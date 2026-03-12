@@ -7,8 +7,7 @@ disable-model-invocation: true
 ## Context
 
 - Current branch: !`git branch --show-current`
-- Base branch: !`if git rev-parse --verify main >/dev/null 2>&1; then echo main; else echo master; fi`
-- Commits on this branch (since base): !`if git rev-parse --verify main >/dev/null 2>&1; then git log --oneline main..HEAD; else git log --oneline master..HEAD; fi`
+- Default branch candidates: !`git branch -r | grep -E 'origin/(main|master)'`
 - PR for this branch: !`gh pr view --json number,title,url 2>/dev/null || echo "NO_PR"`
 
 ## Your task
@@ -17,9 +16,10 @@ Create or update a pull request for the current branch.
 
 ### Pre-flight checks
 
-1. If the current branch is the base branch, stop and tell the user to switch to a feature branch first. Do nothing else.
-2. If there are **no commits** ahead of the base branch, stop and tell the user to commit changes first. Do nothing else.
-3. Never run `git add` or `git commit`. Only manage the PR.
+1. Detect the base branch by running: `git rev-parse --verify origin/main >/dev/null 2>&1 && echo main || echo master`. Use this as `<base>`.
+2. If the current branch is the base branch, stop and tell the user to switch to a feature branch first. Do nothing else.
+3. Run `git log <base>..HEAD --oneline`. If there are **no commits** ahead of the base branch, stop and tell the user to commit changes first. Do nothing else.
+4. Never run `git add` or `git commit`. Only manage the PR.
 
 ### Analysis
 
