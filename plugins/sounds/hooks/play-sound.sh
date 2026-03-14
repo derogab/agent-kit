@@ -29,4 +29,4 @@ play_sound() {
   fi
 }
 
-play_sound $1
+play_sound $1 &
