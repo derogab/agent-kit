@@ -57,15 +57,26 @@ When **updating**, keep the existing title unless it is generic (e.g. "Update"),
 
 **Create flow:**
 1. Push the branch to origin: `git push -u origin <branch>`.
-2. Create the PR: `gh pr create --title "<title>" --body "<body>"`.
+2. Create the PR:
+   ```bash
+   gh pr create --title "<title>" --body "$(cat <<'EOF'
+   <body>
+   EOF
+   )"
+   ```
 
 **Update flow:**
-1. Update the PR: `gh pr edit --title "<title>" --body "<body>"`.
+1. Update the PR:
+   ```bash
+   gh pr edit --title "<title>" --body "$(cat <<'EOF'
+   <body>
+   EOF
+   )"
+   ```
 
 ### Rules
 
 - Write the summary in plain English, focusing on the **why** and the **what**.
 - List changes as concise bullet points. Group related items under sub-headers if the PR touches multiple areas.
 - The test plan should contain actionable verification steps relevant to the changes. If a check was already run and passed, mark it as done.
-- Use a HEREDOC to pass the body to `gh pr create` or `gh pr edit`.
 - Do not send any text besides the tool calls.
