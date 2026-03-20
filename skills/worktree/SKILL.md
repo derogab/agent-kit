@@ -69,4 +69,4 @@ The first entry in `Worktree list` is the main worktree. Construct the expected 
 - Handle directories too — the missing item may be an entire directory.
 - Always quote paths in shell commands.
 - Do not run tests or other downstream verification.
-- Do not send any text besides the tool calls.
+- Keep text output minimal — only report the final result.
