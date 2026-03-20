@@ -49,5 +49,5 @@ Append `!` after the type/scope for breaking changes (e.g. `feat!: change API re
 - Add a body only when the diff is non-trivial and the "why" isn't obvious from the description.
 - Body: wrap at 72 characters, explain **why** not what.
 - Match the style and tone of the recent commits shown above.
-- Use a HEREDOC to pass the message to `git commit -m`.
+- Use a HEREDOC to pass the message to `git commit -F -`.
 - Do not send any text besides the tool calls.
