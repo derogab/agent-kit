@@ -42,6 +42,21 @@ When **updating**, keep the existing title unless it is generic (e.g. "Update"),
 
 ### PR body format
 
+First, check if the repository has a PR template. Look for these files in order:
+1. `pull_request_template.md` in the repo root
+2. `.github/pull_request_template.md`
+3. `.github/PULL_REQUEST_TEMPLATE/*.md`
+
+**If multiple templates exist in `.github/PULL_REQUEST_TEMPLATE/`:**
+- Read all template files in that directory
+- Analyze the current changes (types of files modified, nature of changes)
+- Select the template whose filename and content best match the changes (e.g., `bugfix.md` for bug fixes, `feature.md` for new features, `docs.md` for documentation changes)
+
+**If a template is found:**
+- Use the template's content as the PR body
+- Replace any placeholder variables (e.g., `{{description}}`, `{{summary}}`) with actual content derived from the changes
+
+**If no template is found, use this default format:**
 ```
 ## Summary
 <1-2 sentence high-level description of what this PR does and why>
