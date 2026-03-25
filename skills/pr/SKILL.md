@@ -55,6 +55,8 @@ First, check if the repository has a PR template. Look for these files in order:
 **If a template is found:**
 - Use the template's content as the PR body
 - Replace any placeholder variables (e.g., `{{description}}`, `{{summary}}`) with actual content derived from the changes
+- If the template includes a checklist, only check items that are truly complete and verified. Leave items unchecked when the related work is not done, not validated yet, or failed.
+- If you can reasonably perform a check needed to validate a checklist item (for example by reading the diff, inspecting files, or running an available verification command), do it before deciding whether the item should be checked.
 
 **If no template is found, use this default format:**
 ```
@@ -94,4 +96,6 @@ First, check if the repository has a PR template. Look for these files in order:
 - Write the summary in plain English, focusing on the **why** and the **what**.
 - List changes as concise bullet points. Group related items under sub-headers if the PR touches multiple areas.
 - The test plan should contain actionable verification steps relevant to the changes. If a check was already run and passed, mark it as done.
+- If the PR body includes a checklist from a template, never auto-check every item. Each checked item must match work that is actually done and confirmed.
+- When a checklist item can be validated with available evidence or commands, verify it instead of guessing.
 - Do not send any text besides the tool calls.
