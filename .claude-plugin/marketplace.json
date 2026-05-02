@@ -42,6 +42,18 @@
       },
       "repository": "https://github.com/derogab/agent-kit",
       "keywords": ["alerts", "sounds"]
+    },
+    {
+      "name": "inkypal",
+      "source": "./plugins/inkypal",
+      "category": "development",
+      "description": "Notifies InkyPal when a task finish",
+      "version": "0.1.0",
+      "author": {
+        "name": "Gabriele De Rosa"
+      },
+      "repository": "https://github.com/derogab/agent-kit",
+      "keywords": ["alerts", "inkypal", "notifications"]
     }
   ]
 }

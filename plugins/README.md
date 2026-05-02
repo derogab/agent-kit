@@ -4,6 +4,7 @@
 |--------|-------------|
 | [dev](./dev/) | Skills to help with everyday development tasks |
 | [git](./git/) | Git workflow skills for commits and pull requests |
+| [inkypal](./inkypal/) | Notifies InkyPal when a task finish |
 | [sounds](./sounds/) | OS-native sound alerts on events like task completion |
 
 ## Install
