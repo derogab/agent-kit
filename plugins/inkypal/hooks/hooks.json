@@ -1,0 +1,15 @@
+{
+  "description": "Notifies InkyPal when a task finish",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
