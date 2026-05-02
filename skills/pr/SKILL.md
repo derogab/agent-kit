@@ -1,7 +1,9 @@
 ---
 name: pr
-description: Create or update a pull request for the current branch with a summary of all changes.
-disable-model-invocation: true
+description: Create or update a pull request for the current branch with a summary of all changes. Use when the user asks to open, create, update, or refresh a PR/pull request.
+disable-model-invocation: false
+user-invocable: true
+allowed-tools: Bash(git branch:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(gh pr view:*) Bash(gh pr create:*) Bash(gh pr edit:*) Read
 ---
 
 ## Context

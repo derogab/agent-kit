@@ -11,7 +11,7 @@
       "strict": false,
       "category": "development",
       "description": "Collection of skills to help with everyday Git tasks",
-      "version": "0.1.12",
+      "version": "0.2.0",
       "author": {
         "name": "Gabriele De Rosa"
       },
