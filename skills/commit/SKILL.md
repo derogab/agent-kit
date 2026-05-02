@@ -1,7 +1,9 @@
 ---
 name: commit
-description: Create a git commit following the Conventional Commits specification.
-disable-model-invocation: true
+description: Create a git commit following the Conventional Commits specification. Use when the user asks to commit staged changes or create a commit message.
+disable-model-invocation: false
+user-invocable: true
+allowed-tools: Bash(git diff:*) Bash(git branch:*) Bash(git log:*)
 ---
 
 ## Context
