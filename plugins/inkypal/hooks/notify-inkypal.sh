@@ -5,7 +5,8 @@
 # and POSTs to InkyPal with bypass_ai=true so the raw text is shown.
 #
 # Required env: INKYPAL_HOST, INKYPAL_PORT
-# No-ops silently if either is unset or InkyPal is unreachable.
+# Optional env: INKYPAL_API_KEY (sent as Authorization: Bearer <key>)
+# No-ops silently if either required var is unset or InkyPal is unreachable.
 
 set -u
 
@@ -50,9 +51,15 @@ esac
 
 BODY="$(jq -nc --arg c "$CONTENT" --arg f "$FACE" '{face: $f, content: $c, bypass_ai: true}')"
 
+AUTH_ARGS=()
+if [ -n "${INKYPAL_API_KEY:-}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer ${INKYPAL_API_KEY}")
+fi
+
 curl -sS -m 5 \
   -X POST "http://${INKYPAL_HOST}:${INKYPAL_PORT}/message" \
   -H 'Content-Type: application/json' \
+  "${AUTH_ARGS[@]}" \
   -d "$BODY" >/dev/null 2>&1 || true
 
 exit 0

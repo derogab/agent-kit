@@ -8,8 +8,9 @@ Set the following environment variables:
 
 - `INKYPAL_HOST`: the InkyPal host (e.g. `192.168.1.50`)
 - `INKYPAL_PORT`: the InkyPal port (e.g. `8080`)
+- `INKYPAL_API_KEY` (optional): bearer token sent as `Authorization: Bearer <key>` when InkyPal is configured to require authentication.
 
-If either variable is unset, the hook does nothing.
+If either `INKYPAL_HOST` or `INKYPAL_PORT` is unset, the hook does nothing.
 
 ## Install
 
