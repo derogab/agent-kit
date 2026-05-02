@@ -47,8 +47,8 @@
       "name": "inkypal",
       "source": "./plugins/inkypal",
       "category": "development",
-      "description": "Notifies InkyPal when a task finish",
-      "version": "0.1.1",
+      "description": "Notifies InkyPal on lifecycle events",
+      "version": "0.2.0",
       "author": {
         "name": "Gabriele De Rosa"
       },

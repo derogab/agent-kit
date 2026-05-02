@@ -1,6 +1,18 @@
 # inkypal
 
-A plugin that notifies [InkyPal](https://github.com/derogab/inkypal) when a task finish.
+A plugin that notifies [InkyPal](https://github.com/derogab/inkypal) on lifecycle events.
+
+## Events
+
+| Hook | Face | Message |
+|------|------|---------|
+| `SessionStart` | `happy` | `Session started` / `resumed` / `cleared` / `compacted` |
+| `SessionEnd` | `sleepy` | `Session ended[: <reason>]` |
+| `Stop` | tone-matched | `<last user prompt> -> <last assistant text>` |
+| `SubagentStop` | `cool` | last subagent text |
+| `Notification` | `alert` | the notification message (e.g. permission request) |
+
+Messages are sent with `bypass_ai: true` so InkyPal shows the raw text without AI rewriting.
 
 ## Configuration
 
