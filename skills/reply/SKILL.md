@@ -1,9 +1,9 @@
 ---
 name: reply
-description: Reply to unresolved PR review comments that relate to the current conversation context.
+description: Reply to unresolved PR review comments that clearly relate to the current conversation. Use when the user asks to respond to PR review feedback without resolving threads or editing code.
 disable-model-invocation: true
 user-invocable: true
-allowed-tools: Bash(git branch:*) Bash(gh pr view:*)
+allowed-tools: Bash(git branch:*) Bash(gh pr view:*) Bash(gh repo view:*) Bash(gh api:*)
 ---
 
 ## Context
@@ -30,22 +30,36 @@ Get owner, repo, and PR number for the API calls below:
 OWNER=$(gh repo view --json owner -q .owner.login)
 REPO=$(gh repo view --json name -q .name)
 PR=$(gh pr view --json number -q .number)
+CURRENT_USER=$(gh api user -q .login)
 ```
 
 ### Fetch unresolved review threads
 
-Use the GraphQL API to list every review thread on the PR with its resolution status and the comments inside:
+Use the GraphQL API to list every review thread page on the PR with its resolution status and the comments inside. Run the first request with `-F threadsCursor=null`:
 
 ```bash
-gh api graphql -F owner="$OWNER" -F repo="$REPO" -F pr="$PR" -f query='
-query($owner: String!, $repo: String!, $pr: Int!) {
+gh api graphql \
+  -F owner="$OWNER" \
+  -F repo="$REPO" \
+  -F pr="$PR" \
+  -F threadsCursor=null \
+  -f query='
+query($owner: String!, $repo: String!, $pr: Int!, $threadsCursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $threadsCursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           id
           isResolved
           comments(first: 100) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             nodes {
               databaseId
               author { login }
@@ -53,6 +67,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {
               path
               line
               url
+              createdAt
             }
           }
         }
@@ -62,20 +77,55 @@ query($owner: String!, $repo: String!, $pr: Int!) {
 }'
 ```
 
-Filter the result to threads where `isResolved` is `false`. For each unresolved thread, the first comment's `databaseId` is the one you reply to.
+If `reviewThreads.pageInfo.hasNextPage` is `true`, rerun the same query with `-F threadsCursor="<endCursor>"` until `hasNextPage` is `false`. Combine all returned thread nodes before filtering.
+
+If any unresolved thread has `comments.pageInfo.hasNextPage` set to `true`, fetch the remaining comments before deciding whether to reply:
+
+```bash
+gh api graphql \
+  -F thread="$THREAD_ID" \
+  -F commentsCursor="<endCursor>" \
+  -f query='
+query($thread: ID!, $commentsCursor: String) {
+  node(id: $thread) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $commentsCursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          databaseId
+          author { login }
+          body
+          path
+          line
+          url
+          createdAt
+        }
+      }
+    }
+  }
+}'
+```
+
+Repeat comment pagination until `hasNextPage` is `false`.
+
+Filter the combined result to threads where `isResolved` is `false`. For each unresolved thread, the first comment's `databaseId` is the one you reply to.
 
 ### Match against conversation context
 
 For each unresolved thread:
 
 1. Read every comment in the thread.
-2. Decide whether the topic relates to **this conversation** — files we have edited, decisions we have discussed, errors we have debugged, code we have written together.
-3. If the thread is unrelated, skip it. Do not reply.
-4. If the thread is related, draft a reply grounded in what the conversation actually established. Examples:
+2. If the last comment in the thread is authored by `CURRENT_USER`, skip the thread. A reply is only needed when someone else has added the latest comment.
+3. Decide whether the topic relates to **this conversation** — files we have edited, decisions we have discussed, errors we have debugged, code we have written together.
+4. If the thread is unrelated, skip it. Do not reply.
+5. If the thread is related, draft a reply grounded in what the conversation actually established. Examples:
    - "Done in `<commit-sha>`."
    - "Changed to `<approach>` because `<reason discussed>`."
    - "Good catch — kept the previous behavior because `<reason>`."
-5. When in doubt about relevance, skip. False positives are worse than missed replies.
+6. When in doubt about relevance, skip. False positives are worse than missed replies.
 
 ### Post the reply
 
@@ -94,6 +144,7 @@ EOF
 
 - Only consider threads where `isResolved` is `false`.
 - Only reply when the thread clearly relates to something in the current conversation.
+- Skip threads where the last comment is authored by `CURRENT_USER`.
 - Keep replies concise and factual. Do not invent context.
 - Do not reply twice to the same thread in one run.
 - Do not resolve threads. Do not edit code. Do not push commits. Only post replies.

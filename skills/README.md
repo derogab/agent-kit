@@ -6,7 +6,7 @@ Follows the [Agent Skills](https://agentskills.io) open standard.
 |-------|-------------|
 | [`/commit`](./commit/) | Create a conventional commit from staged changes |
 | [`/pr`](./pr/) | Create or update a pull request for the current branch |
-| [`/reply`](./reply/) | Reply to unresolved PR review comments related to the current conversation |
+| [`/reply`](./reply/) | Reply to unresolved PR review comments clearly related to the current conversation |
 | [`/redis`](./redis/) | Read the Redis Patterns for Coding Agents documentation before answering Redis questions or making Redis changes |
 | [`/review-council`](./review-council/) | Orchestrate a full code review across all available reviewers |
 

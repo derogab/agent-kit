@@ -8,7 +8,7 @@ A collection of skills to help with everyday Git tasks.
 |-------|-------------|
 | `/commit` | Create a conventional commit from staged changes |
 | `/pr` | Create or update a pull request for the current branch |
-| `/reply` | Reply to unresolved PR review comments related to the current conversation |
+| `/reply` | Reply to unresolved PR review comments clearly related to the current conversation |
 
 See the [skills documentation](../../skills/) for more details.
 
