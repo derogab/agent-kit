@@ -41,6 +41,17 @@ Wait for all sub-agents to complete. Produce a single report:
 ## Summary
 [1-3 sentence overall assessment. Mention the number of reviewers run and issues found.]
 
+## Detailed Reviews
+
+### [Skill Name]
+[Full verbatim output from that reviewer's sub-agent]
+
+## Reviewer Verdicts
+
+| Reviewer | Verdict | Key Concerns |
+|----------|---------|--------------|
+| [skill name] | ... | ... |
+
 ## Critical Issues
 [Issues flagged as critical/blocking by ANY reviewer. Deduplicate across reviewers, noting which flagged each.]
 
@@ -49,17 +60,6 @@ Wait for all sub-agents to complete. Produce a single report:
 
 ## Minor Issues & Suggestions
 [Style, naming, minor improvements. Deduplicate across reviewers.]
-
-## Reviewer Verdicts
-
-| Reviewer | Verdict | Key Concerns |
-|----------|---------|--------------|
-| [skill name] | ... | ... |
-
-## Detailed Reviews
-
-### [Skill Name]
-[Full verbatim output from that reviewer's sub-agent]
 ```
 
 ### Rules
