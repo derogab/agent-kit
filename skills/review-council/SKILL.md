@@ -10,65 +10,45 @@ disable-model-invocation: true
 - Base branch: !`git rev-parse --verify main >/dev/null 2>&1 && echo main || echo master`
 - Arguments: $ARGUMENTS
 
-## Your task
+## Task
 
-Act as a **Code Review Orchestrator**: discover all available review-capable skills, run them in parallel via read-only sub-agents, and produce a single aggregated report.
+Act as a **Code Review Orchestrator**: discover every review-capable skill, run each in a read-only sub-agent, and produce one aggregated report.
 
-### Pre-flight checks
+## Workflow
 
-1. Determine the review target:
-   - If `$ARGUMENTS` is a PR number, pass it to each reviewer.
-   - If `$ARGUMENTS` is a file path or set of changes, pass those directly.
-   - If `$ARGUMENTS` is empty, each reviewer should review the current branch compared to the base branch.
+1. Resolve the review target:
+   - PR number in `$ARGUMENTS`: pass it to every reviewer.
+   - File path or set of changes in `$ARGUMENTS`: pass it directly.
+   - Empty `$ARGUMENTS`: review the current branch against the base branch.
+2. Discover reviewers: inspect available skills and select every skill whose name or description indicates code review, PR review, or security review. Exclude this skill itself (`review-council`) to avoid recursion.
+3. Launch reviewers: in a single message, start one read-only sub-agent per reviewer. Each sub-agent must invoke its skill via the Skill tool with the resolved target, return its full review output, and never modify files, create commits, or push.
+4. Aggregate: wait for all reviewers, extract issues only, redact secrets, deduplicate matching issues, and omit raw reviewer output.
 
-### Step 1: Discover available review skills
+## Report
 
-Look at all skills currently available and identify every skill whose name or description indicates it can perform a code review, PR review, or security review. Exclude this skill itself (`review-council`) to avoid recursion.
-
-### Step 2: Launch all reviewers in parallel
-
-For each review-capable skill discovered in Step 1, launch a **read-only sub-agent** that invokes that skill via the Skill tool with `$ARGUMENTS` and returns the full review output.
-
-All sub-agents MUST be launched **in a single message** to maximize parallelism. Sub-agents must not modify files, create commits, or push changes.
-
-### Step 3: Collect results and aggregate
-
-Wait for all sub-agents to complete. Produce a single report:
+Return exactly:
 
 ```
 # Full Code Review Report
 
 ## Summary
-[1-3 sentence overall assessment. Mention the number of reviewers run and issues found.]
+[1-2 sentence overall assessment with the reviewer count and issue count. When some reviewers fail, add a clause such as `2 reviewers failed (skill-a, skill-b)` — count outside, names inside the parens. Skip this clause when everything succeeded.]
 
-## Detailed Reviews
+## Issues
 
-### [Skill Name]
-[Full verbatim output from that reviewer's sub-agent]
-
-## Reviewer Verdicts
-
-| Reviewer | Verdict | Key Concerns |
-|----------|---------|--------------|
-| [skill name] | ... | ... |
-
-## Critical Issues
-[Issues flagged as critical/blocking by ANY reviewer. Deduplicate across reviewers, noting which flagged each.]
-
-## Important Issues
-[Non-blocking but significant issues. Deduplicate across reviewers.]
-
-## Minor Issues & Suggestions
-[Style, naming, minor improvements. Deduplicate across reviewers.]
+| Severity | Issue | File:Line | Reviewers |
+|----------|-------|-----------|-----------|
+| Critical | ... | path/to/file.ts:42 | reviewer-a, reviewer-b |
+| Important | ... | path/to/file.ts:108 | reviewer-c |
+| Minor | ... | path/to/file.ts:15 | reviewer-a |
 ```
 
-### Rules
+## Rules
 
-- All sub-agents MUST be launched in parallel in a single message.
-- Sub-agents are read-only — they must not modify files, create commits, or push changes.
-- Do NOT skip any discovered reviewer. If one fails, report the failure in the output.
-- If multiple reviewers flag the same issue (same file, same line, same concern), merge them into one entry and note all reviewers that caught it.
+- Do NOT skip any discovered reviewer. If a reviewer fails, do NOT add it to the issues table and do NOT create a separate section for it — just note it inline in the Summary parenthetical.
+- If multiple reviewers flag the same issue (same file, same line, same concern), merge them into one row and list all reviewers that caught it in the Reviewers column.
 - If reviewers disagree on severity, use the highest. Severity ranking: Critical > Important > Minor.
-- If 3+ reviewers flag the same issue, mark it with `[CONSENSUS]`.
-- Include the full review output in the Detailed Reviews section, but redact any credentials, secrets, API keys, tokens, or passwords that may appear in the output.
-- Keep Critical Issues short and focused on what MUST be addressed before merging.
+- If 3+ reviewers flag the same issue, prefix the Issue cell with `[CONSENSUS]`.
+- Sort the table by severity (Critical first, then Important, then Minor).
+- Keep each Issue cell to one short sentence. No code blocks, no multi-line entries.
+- Redact any credentials, secrets, API keys, tokens, or passwords that may appear in extracted issues.
