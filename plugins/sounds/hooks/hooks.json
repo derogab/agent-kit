@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh notification"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh notification",
+            "async": true
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh task_complete"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh task_complete",
+            "async": true
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh session_end"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh session_end",
+            "async": true
           }
         ]
       }
