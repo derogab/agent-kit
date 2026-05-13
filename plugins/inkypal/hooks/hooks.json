@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh session-start"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh session-start",
+            "async": true
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh session-end"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh session-end",
+            "async": true
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh stop"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh stop",
+            "async": true
           }
         ]
       }
@@ -36,7 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh subagent-stop"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh subagent-stop",
+            "async": true
           }
         ]
       }
@@ -46,7 +50,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh notification"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-inkypal.sh notification",
+            "async": true
           }
         ]
       }
