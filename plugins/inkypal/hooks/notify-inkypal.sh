@@ -4,7 +4,7 @@
 # message, and POSTs to InkyPal with bypass_ai=true so the raw text is shown.
 #
 # Usage: notify-inkypal.sh <event>
-#   event: stop | subagent-stop | notification | session-start | session-end
+#   event: stop | subagent-stop | notification
 #
 # Required env: INKYPAL_HOST, INKYPAL_PORT
 # Optional env: INKYPAL_API_KEY (sent as Authorization: Bearer <key>)
@@ -91,25 +91,6 @@ case "$EVENT" in
     MSG="$(printf '%s' "$INPUT" | jq -r '.message // empty' 2>/dev/null)"
     CONTENT="${MSG:-Agent needs your attention}"
     FACE="alert"
-    ;;
-  session-start)
-    SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null)"
-    case "$SOURCE" in
-      resume)  CONTENT="Session resumed" ;;
-      clear)   CONTENT="Session cleared" ;;
-      compact) CONTENT="Session compacted" ;;
-      *)       CONTENT="Session started" ;;
-    esac
-    FACE="happy"
-    ;;
-  session-end)
-    REASON="$(printf '%s' "$INPUT" | jq -r '.reason // empty' 2>/dev/null)"
-    if [ -n "$REASON" ]; then
-      CONTENT="Session ended: $REASON"
-    else
-      CONTENT="Session ended"
-    fi
-    FACE="sleepy"
     ;;
   *)
     exit 0

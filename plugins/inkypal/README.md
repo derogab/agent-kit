@@ -6,8 +6,6 @@ A plugin that notifies [InkyPal](https://github.com/derogab/inkypal) on lifecycl
 
 | Hook | Face | Message |
 |------|------|---------|
-| `SessionStart` | `happy` | `Session started` / `resumed` / `cleared` / `compacted` |
-| `SessionEnd` | `sleepy` | `Session ended[: <reason>]` |
 | `Stop` | tone-matched | `<last user prompt> -> <last assistant text>` |
 | `SubagentStop` | `cool` | last subagent text |
 | `Notification` | `alert` | the notification message (e.g. permission request) |
