@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Council"
+  short_description: "Coordinate parallel code reviews and validation"
+  default_prompt: "Use $review-council to run parallel code reviews and produce a validated issue report."

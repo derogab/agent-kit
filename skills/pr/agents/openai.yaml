@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pull Request"
+  short_description: "Create or update pull requests for this branch"
+  default_prompt: "Use $pr to create or update the pull request for the current branch."

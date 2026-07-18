@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit"
+  short_description: "Create Conventional Commits from staged changes"
+  default_prompt: "Use $commit to create a Conventional Commit from the staged changes."

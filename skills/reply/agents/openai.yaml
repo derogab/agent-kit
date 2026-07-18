@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reply to Review Comments"
+  short_description: "Reply to relevant unresolved PR comments"
+  default_prompt: "Use $reply to respond to unresolved PR review comments related to our work."

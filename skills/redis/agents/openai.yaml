@@ -1,0 +1,4 @@
+interface:
+  display_name: "Redis"
+  short_description: "Apply current Redis coding patterns and guidance"
+  default_prompt: "Use $redis to consult the current Redis Patterns for Coding Agents guidance for this task."
