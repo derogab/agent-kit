@@ -1,6 +1,6 @@
 # inkypal
 
-A plugin that notifies [InkyPal](https://github.com/derogab/inkypal) on lifecycle events.
+A Claude Code plugin that notifies [InkyPal](https://github.com/derogab/inkypal) on lifecycle events.
 
 ## Events
 

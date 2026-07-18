@@ -6,7 +6,7 @@ A collection of plugins, skills, agents, and hooks for code agents (e.g. Claude 
 
 | | Pi | OpenCode | Claude Code | Codex CLI | Cursor | Gemini CLI | Antigravity |
 |-------|----|----------|-------------|-----------|--------|------------|-------------|
-| [Plugins](./plugins/) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| [Plugins](./plugins/) | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | [Skills](./skills/) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### [Plugins](./plugins/)

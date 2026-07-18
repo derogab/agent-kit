@@ -1,6 +1,6 @@
 # git
 
-A collection of skills to help with everyday Git tasks.
+A Claude Code plugin that provides skills to help with everyday Git tasks.
 
 ## Skills
 

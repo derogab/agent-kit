@@ -1,6 +1,6 @@
 # dev
 
-A plugin that provides skills to help with everyday development tasks.
+A Claude Code plugin that provides skills to help with everyday development tasks.
 
 ## Skills
 
