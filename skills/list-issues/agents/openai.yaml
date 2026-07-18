@@ -1,0 +1,4 @@
+interface:
+  display_name: "List Issues"
+  short_description: "Track and present code issues consistently"
+  default_prompt: "Use $list-issues to organize the code issues we found into a stable, clear table."

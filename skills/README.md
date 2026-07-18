@@ -5,12 +5,15 @@ Follows the [Agent Skills](https://agentskills.io) open standard.
 | Skill | Description |
 |-------|-------------|
 | [`/commit`](./commit/) | Create a conventional commit from staged changes |
+| [`/list-issues`](./list-issues/) | Organize and track code issues in a table with stable IDs, types, descriptions, and statuses |
 | [`/pr`](./pr/) | Create or update a pull request for the current branch |
 | [`/reply`](./reply/) | Reply to unresolved PR review comments clearly related to the current conversation |
 | [`/redis`](./redis/) | Read the Redis Patterns for Coding Agents documentation before answering Redis questions or making Redis changes |
 | [`/review-council`](./review-council/) | Orchestrate a full code review across all available reviewers |
 
 ## Install
+
+Install all skills with [skills.sh](https://skills.sh):
 
 ```bash
 npx skills add -g derogab/agent-kit
@@ -20,6 +23,7 @@ or symlink the skills you need into your agent's skills folder:
 
 ```bash
 ln -s /path/to/agent-kit/skills/commit ~/path/to/your/agent/skills/commit
+ln -s /path/to/agent-kit/skills/list-issues ~/path/to/your/agent/skills/list-issues
 ln -s /path/to/agent-kit/skills/pr ~/path/to/your/agent/skills/pr
 ln -s /path/to/agent-kit/skills/reply ~/path/to/your/agent/skills/reply
 ln -s /path/to/agent-kit/skills/redis ~/path/to/your/agent/skills/redis
