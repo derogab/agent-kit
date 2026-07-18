@@ -4,10 +4,10 @@ A collection of plugins, skills, agents, and hooks for code agents (e.g. Claude 
 
 ## What's included
 
-| | OpenCode | Claude Code | Codex CLI | Cursor | Gemini CLI | Antigravity |
-|-------|----------|-------------|-----------|--------|------------|-------------|
-| [Plugins](./plugins/) | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| [Skills](./skills/) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| | Pi | OpenCode | Claude Code | Codex CLI | Cursor | Gemini CLI | Antigravity |
+|-------|----|----------|-------------|-----------|--------|------------|-------------|
+| [Plugins](./plugins/) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| [Skills](./skills/) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### [Plugins](./plugins/)
 
