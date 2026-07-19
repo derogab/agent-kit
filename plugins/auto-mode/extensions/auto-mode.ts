@@ -48,6 +48,7 @@ async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"all
 		headers: auth.headers,
 		env: auth.env,
 		signal: ctx.signal,
+		reasoning: "medium",
 		cacheRetention: "none",
 	});
 
