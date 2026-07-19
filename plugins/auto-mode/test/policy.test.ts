@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildClassifierContext, parseClassifierDecision } from "../extensions/classifier.ts";
-import { decideManually, parsePolicyConfig } from "../extensions/policy.ts";
+import { decideManually, mergePolicyConfigs, parsePolicyConfig } from "../extensions/policy.ts";
 
 test("an empty configuration sends commands to the AI check", () => {
 	assert.equal(decideManually(parsePolicyConfig("{}"), "git status"), "ai");
@@ -11,6 +11,14 @@ test("an empty configuration sends commands to the AI check", () => {
 test("deny rules take precedence over allow rules", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["git"], deny: ["^git push --force$"] }));
 	assert.equal(decideManually(policy, "git push --force"), "deny");
+});
+
+test("user and project rules are combined", () => {
+	const user = parsePolicyConfig('{"allow":["^npm test$"]}');
+	const project = parsePolicyConfig('{"allow":["^pnpm test$"],"deny":["^npm test$"]}');
+	const policy = mergePolicyConfigs(user, project);
+	assert.equal(decideManually(policy, "npm test"), "deny");
+	assert.equal(decideManually(policy, "pnpm test"), "allow");
 });
 
 test("anchored patterns match exact commands after trimming whitespace", () => {

@@ -46,6 +46,13 @@ export function parsePolicyConfig(source: string): PolicyConfig {
 	return policy;
 }
 
+export function mergePolicyConfigs(...policies: PolicyConfig[]): PolicyConfig {
+	return {
+		allow: policies.flatMap((policy) => policy.allow),
+		deny: policies.flatMap((policy) => policy.deny),
+	};
+}
+
 function matchesPattern(patterns: string[], command: string): boolean {
 	return patterns.some((pattern) => new RegExp(pattern).test(command));
 }

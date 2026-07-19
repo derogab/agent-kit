@@ -18,7 +18,10 @@ pi install npm:@derogab/pi-auto-mode
 
 ## Configure
 
-Create `auto-mode.json` in Pi's agent directory, normally `~/.pi/agent/auto-mode.json`:
+Create `auto-mode.json` in either or both locations:
+
+- Pi's user agent directory, normally `~/.pi/agent/auto-mode.json`
+- The trusted project's `.pi/auto-mode.json`
 
 ```json
 {
@@ -35,6 +38,6 @@ Create `auto-mode.json` in Pi's agent directory, normally `~/.pi/agent/auto-mode
 }
 ```
 
-Each entry is a case-sensitive JavaScript regular expression tested against the full command after surrounding whitespace is removed. Use anchors such as `^git status$` for exact commands. Deny rules take precedence. If the file is missing, all commands go to the AI check; if it is invalid, commands are blocked until it is fixed.
+Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression tested against the full command after surrounding whitespace is removed. Use anchors such as `^git status$` for exact commands. Deny rules from either file take precedence. If both files are missing, all commands go to the AI check; if either file is invalid, commands are blocked until it is fixed.
 
 This plugin gates Pi's built-in `bash` tool only. It is a lightweight permission check, not a sandbox or a guarantee of safety.

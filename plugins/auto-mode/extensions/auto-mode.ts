@@ -2,25 +2,34 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
+	CONFIG_DIR_NAME,
 	getAgentDir,
 	isToolCallEventType,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { buildClassifierContext, parseClassifierDecision } from "./classifier.ts";
-import { decideManually, parsePolicyConfig } from "./policy.ts";
+import { decideManually, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 
-const CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
+const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 
-async function loadPolicy() {
+async function loadPolicyFile(path: string) {
 	try {
-		return parsePolicyConfig(await readFile(CONFIG_PATH, "utf8"));
+		return parsePolicyConfig(await readFile(path, "utf8"));
 	} catch (error) {
 		if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
 			return parsePolicyConfig("{}");
 		}
 		throw error;
 	}
+}
+
+async function loadPolicy(ctx: ExtensionContext) {
+	const paths = [USER_CONFIG_PATH];
+	if (ctx.isProjectTrusted()) {
+		paths.push(join(ctx.cwd, CONFIG_DIR_NAME, "auto-mode.json"));
+	}
+	return mergePolicyConfigs(...(await Promise.all(paths.map(loadPolicyFile))));
 }
 
 async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"allow" | "deny"> {
@@ -63,7 +72,7 @@ export default function (pi: ExtensionAPI) {
 
 		let manualDecision;
 		try {
-			manualDecision = decideManually(await loadPolicy(), event.input.command);
+			manualDecision = decideManually(await loadPolicy(ctx), event.input.command);
 		} catch (error) {
 			return {
 				block: true,
