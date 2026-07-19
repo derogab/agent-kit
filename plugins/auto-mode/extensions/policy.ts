@@ -1,13 +1,11 @@
 export interface PolicyConfig {
-	allowCommands: string[];
-	allowPatterns: string[];
-	denyCommands: string[];
-	denyPatterns: string[];
+	allow: string[];
+	deny: string[];
 }
 
 export type ManualDecision = "allow" | "deny" | "ai";
 
-const POLICY_KEYS = ["allowCommands", "allowPatterns", "denyCommands", "denyPatterns"] as const;
+const POLICY_KEYS = ["allow", "deny"] as const;
 
 function readStringArray(config: Record<string, unknown>, key: (typeof POLICY_KEYS)[number]): string[] {
 	const value = config[key];
@@ -31,17 +29,12 @@ export function parsePolicyConfig(source: string): PolicyConfig {
 	}
 
 	const policy = {
-		allowCommands: readStringArray(config, "allowCommands"),
-		allowPatterns: readStringArray(config, "allowPatterns"),
-		denyCommands: readStringArray(config, "denyCommands"),
-		denyPatterns: readStringArray(config, "denyPatterns"),
+		allow: readStringArray(config, "allow"),
+		deny: readStringArray(config, "deny"),
 	};
 
-	for (const [key, patterns] of [
-		["allowPatterns", policy.allowPatterns],
-		["denyPatterns", policy.denyPatterns],
-	] as const) {
-		for (const pattern of patterns) {
+	for (const key of POLICY_KEYS) {
+		for (const pattern of policy[key]) {
 			try {
 				new RegExp(pattern);
 			} catch {
@@ -60,10 +53,10 @@ function matchesPattern(patterns: string[], command: string): boolean {
 export function decideManually(policy: PolicyConfig, command: string): ManualDecision {
 	const normalized = command.trim();
 
-	if (policy.denyCommands.includes(normalized) || matchesPattern(policy.denyPatterns, normalized)) {
+	if (matchesPattern(policy.deny, normalized)) {
 		return "deny";
 	}
-	if (policy.allowCommands.includes(normalized) || matchesPattern(policy.allowPatterns, normalized)) {
+	if (matchesPattern(policy.allow, normalized)) {
 		return "allow";
 	}
 	return "ai";

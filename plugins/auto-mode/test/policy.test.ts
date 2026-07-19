@@ -9,12 +9,12 @@ test("an empty configuration sends commands to the AI check", () => {
 });
 
 test("deny rules take precedence over allow rules", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allowPatterns: ["git"], denyCommands: ["git push --force"] }));
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["git"], deny: ["^git push --force$"] }));
 	assert.equal(decideManually(policy, "git push --force"), "deny");
 });
 
-test("exact commands ignore surrounding whitespace", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allowCommands: ["npm test"] }));
+test("anchored patterns match exact commands after trimming whitespace", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test$"] }));
 	assert.equal(decideManually(policy, "  npm test\n"), "allow");
 	assert.equal(decideManually(policy, "npm test -- --watch"), "ai");
 });
@@ -22,8 +22,8 @@ test("exact commands ignore surrounding whitespace", () => {
 test("regular expression rules match the full command string", () => {
 	const policy = parsePolicyConfig(
 		JSON.stringify({
-			allowPatterns: ["^npm (test|run lint)(?:\\s|$)"],
-			denyPatterns: ["(^|\\s)sudo(\\s|$)"],
+			allow: ["^npm (test|run lint)(?:\\s|$)"],
+			deny: ["(^|\\s)sudo(\\s|$)"],
 		}),
 	);
 	assert.equal(decideManually(policy, "npm run lint -- --fix"), "allow");
@@ -31,9 +31,9 @@ test("regular expression rules match the full command string", () => {
 });
 
 test("invalid configuration fields and patterns are rejected", () => {
-	assert.throws(() => parsePolicyConfig('{"allows":["git status"]}'), /unknown configuration field/);
-	assert.throws(() => parsePolicyConfig('{"allowCommands":"git status"}'), /array of non-empty strings/);
-	assert.throws(() => parsePolicyConfig('{"denyPatterns":["["]}'), /invalid regular expression/);
+	assert.throws(() => parsePolicyConfig('{"extra":[]}'), /unknown configuration field/);
+	assert.throws(() => parsePolicyConfig('{"allow":"git status"}'), /array of non-empty strings/);
+	assert.throws(() => parsePolicyConfig('{"deny":["["]}'), /invalid regular expression/);
 });
 
 test("the packaged example is valid", async () => {
