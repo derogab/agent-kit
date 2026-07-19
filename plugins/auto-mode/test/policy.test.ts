@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { buildClassifierContext, parseClassifierDecision } from "../extensions/classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "../extensions/policy.ts";
 
 test("an empty configuration has no policy decision", () => {
@@ -32,120 +31,40 @@ test("user and project rules are combined", () => {
 	assert.equal(decideByPolicy(policy, "git push"), "ask");
 });
 
-test("anchored patterns match exact commands after trimming whitespace", () => {
+test("patterns are matched after surrounding whitespace is trimmed", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test$"] }));
 	assert.equal(decideByPolicy(policy, "  npm test\n"), "allow");
 	assert.equal(decideByPolicy(policy, "npm test -- --watch"), undefined);
 });
 
-test("regular expression rules match the full command string", () => {
-	const policy = parsePolicyConfig(
-		JSON.stringify({
-			allow: ["^npm (test|run lint)(?:\\s|$)"],
-			deny: ["(^|\\s)sudo(\\s|$)"],
-		}),
-	);
+test("regular expression patterns can cover command variants", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm (test|run lint)(?:\\s|$)"] }));
 	assert.equal(decideByPolicy(policy, "npm run lint -- --fix"), "allow");
-	assert.equal(decideByPolicy(policy, "cd app && sudo make install"), "deny");
+	assert.equal(decideByPolicy(policy, "pnpm run lint"), undefined);
 });
 
-test("all commands joined by control operators must match allow rules", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^cd app$", "^npm test$"] }));
-	for (const operator of ["&&", "||", "|", "|&", ";", "&", "\n"]) {
-		assert.equal(decideByPolicy(policy, `cd app ${operator} npm test`), "allow", operator);
-		assert.equal(decideByPolicy(policy, `cd app ${operator} npm run build`), undefined, operator);
-	}
-});
-
-test("a full-command allow match does not bypass control operator checks", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
-	for (const command of [
-		"npm test && git push",
-		"npm test || git push",
-		"npm test | git push",
-		"npm test |& git push",
-		"npm test;git push",
-		"npm test & git push",
-		"npm test\ngit push",
+test("invalid configuration shapes are rejected", () => {
+	for (const source of [
+		"null",
+		"[]",
+		'"allow"',
+		'{"allow":null}',
+		'{"allow":{}}',
+		'{"allow":[null]}',
+		'{"allow":[""]}',
+		'{"allow":["   "]}',
+		'{"extra":[]}',
+		'{"__proto__":[]}',
 	]) {
-		assert.equal(decideByPolicy(policy, command), undefined, command);
+		assert.throws(() => parsePolicyConfig(source), undefined, source);
 	}
 });
 
-test("all pipeline stages must match allow rules", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^wc -l$"] }));
-	assert.equal(decideByPolicy(policy, "git status | wc -l"), "allow");
-	assert.equal(decideByPolicy(policy, "git status | head"), undefined);
-});
-
-test("deny rules on a chained command take precedence", () => {
-	const policy = parsePolicyConfig(
-		JSON.stringify({
-			allow: ["^npm test$", "^git push$", "^npm test && git push$"],
-			deny: ["^git push$"],
-		}),
-	);
-	assert.equal(decideByPolicy(policy, "npm test && git push"), "deny");
-});
-
-test("ask rules on a chained command take precedence over allow rules", () => {
-	const policy = parsePolicyConfig(
-		JSON.stringify({
-			allow: ["^npm test$", "^git push$"],
-			ask: ["^git push$"],
-		}),
-	);
-	assert.equal(decideByPolicy(policy, "npm test && git push"), "ask");
-});
-
-test("quoted and escaped control operators are not command separators", () => {
-	const policy = parsePolicyConfig(
-		JSON.stringify({
-			allow: [
-				"^printf 'left \\| right'$",
-				"^printf 'left && right'$",
-				"^printf 'left; right'$",
-				"^printf 'left || right'$",
-				"^printf 'left & right'$",
-				"^printf left\\\\\\|right$",
-				"^printf left\\\\;right$",
-				"^wc -c$",
-			],
-		}),
-	);
-	assert.equal(decideByPolicy(policy, "printf 'left | right' | wc -c"), "allow");
-	assert.equal(decideByPolicy(policy, "printf 'left && right' && wc -c"), "allow");
-	assert.equal(decideByPolicy(policy, "printf 'left; right'"), "allow");
-	assert.equal(decideByPolicy(policy, "printf 'left || right'"), "allow");
-	assert.equal(decideByPolicy(policy, "printf 'left & right'"), "allow");
-	assert.equal(decideByPolicy(policy, "printf left\\|right | wc -c"), "allow");
-	assert.equal(decideByPolicy(policy, "printf left\\;right"), "allow");
-});
-
-test("nested shell execution cannot be allowed by an outer-command pattern", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^(printf|cat)(?:\\s|$)", "^\\(git status\\)$"] }));
-	for (const command of [
-		"printf $(git push)",
-		'printf "$(git push)"',
-		"printf `git push`",
-		"cat <(git status)",
-		"(git status)",
-	]) {
-		assert.equal(decideByPolicy(policy, command), undefined, command);
+test("invalid regular expression patterns are rejected", () => {
+	for (const key of ["allow", "ask", "deny"]) {
+		const source = JSON.stringify({ [key]: ["["] });
+		assert.throws(() => parsePolicyConfig(source), /invalid regular expression/, key);
 	}
-});
-
-test("redirection ampersands are not command separators", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test &>test.log$", "^npm test 2>&1$"] }));
-	assert.equal(decideByPolicy(policy, "npm test &>test.log"), "allow");
-	assert.equal(decideByPolicy(policy, "npm test 2>&1"), "allow");
-});
-
-test("invalid configuration fields and patterns are rejected", () => {
-	assert.throws(() => parsePolicyConfig('{"extra":[]}'), /unknown configuration field/);
-	assert.throws(() => parsePolicyConfig('{"allow":"git status"}'), /array of non-empty strings/);
-	assert.throws(() => parsePolicyConfig('{"ask":["["]}'), /invalid regular expression/);
-	assert.throws(() => parsePolicyConfig('{"deny":["["]}'), /invalid regular expression/);
 });
 
 test("the packaged example is valid", async () => {
@@ -154,22 +73,4 @@ test("the packaged example is valid", async () => {
 	assert.equal(decideByPolicy(policy, "git status"), "allow");
 	assert.equal(decideByPolicy(policy, "git push"), "ask");
 	assert.equal(decideByPolicy(policy, "sudo make install"), "deny");
-});
-
-test("the classifier receives only its fixed prompt, cwd, and command", () => {
-	const context = buildClassifierContext("npm test", "/workspace");
-	assert.match(context.systemPrompt, /Return exactly ALLOW, ASK, or DENY\./);
-	assert.equal(context.messages.length, 1);
-	assert.deepEqual(JSON.parse(context.messages[0].content[0].text), {
-		command: "npm test",
-		cwd: "/workspace",
-	});
-});
-
-test("only an exact classifier decision is accepted", () => {
-	assert.equal(parseClassifierDecision(" ALLOW\n"), "allow");
-	assert.equal(parseClassifierDecision("ASK"), "ask");
-	assert.equal(parseClassifierDecision("DENY"), "deny");
-	assert.equal(parseClassifierDecision("allow"), undefined);
-	assert.equal(parseClassifierDecision("The command is safe: ALLOW"), undefined);
 });

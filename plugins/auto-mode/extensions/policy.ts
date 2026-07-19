@@ -78,6 +78,7 @@ function readControlOperator(command: string, index: number): ControlOperator | 
 	}
 	if (rest.startsWith(";;") || rest.startsWith(";&")) return { length: 2, canTerminate: true };
 	if (rest.startsWith(";")) return { length: 1, canTerminate: true };
+	if (rest.startsWith("|") && command[index - 1] === ">") return undefined;
 	if (rest.startsWith("|")) return { length: 1, canTerminate: false };
 	if (rest.startsWith("\n")) return { length: 1, canTerminate: true };
 	if (
@@ -91,10 +92,24 @@ function readControlOperator(command: string, index: number): ControlOperator | 
 	return undefined;
 }
 
+function startsExecutableExpansion(command: string, index: number): boolean {
+	if (command[index] === "`") return true;
+	if (command[index] !== "$") return false;
+
+	const next = command[index + 1];
+	if (next === "(" || next === "[") return true;
+	if (next !== "{") return false;
+
+	const marker = command[index + 2];
+	return marker === "|" || marker === " " || marker === "\t" || marker === "\n";
+}
+
 function analyzeCommand(command: string): CommandAnalysis {
 	const parts: string[] = [];
 	let start = 0;
 	let quote: "'" | '"' | undefined;
+	let commentStart: number | undefined;
+	let atWordStart = true;
 	let canAutoAllow = true;
 	let sawOperator = false;
 	let lastOperatorCanTerminate = false;
@@ -102,15 +117,16 @@ function analyzeCommand(command: string): CommandAnalysis {
 	for (let index = 0; index < command.length; index += 1) {
 		const character = command[index];
 
+		if (commentStart !== undefined) {
+			if (character !== "\n") continue;
+		}
+
 		if (quote) {
 			if (character === "\\" && quote !== "'") {
 				index += 1;
 			} else if (character === quote) {
 				quote = undefined;
-			} else if (
-				quote === '"' &&
-				(character === "`" || (character === "$" && command[index + 1] === "("))
-			) {
+			} else if (quote === '"' && startsExecutableExpansion(command, index)) {
 				canAutoAllow = false;
 			}
 			continue;
@@ -118,27 +134,41 @@ function analyzeCommand(command: string): CommandAnalysis {
 
 		if (character === "\\") {
 			if (index + 1 >= command.length) canAutoAllow = false;
+			if (command[index + 1] !== "\n") atWordStart = false;
 			index += 1;
 			continue;
 		}
 		if (character === "'" || character === '"') {
 			quote = character;
+			atWordStart = false;
+			continue;
+		}
+		if (character === "#" && atWordStart) {
+			commentStart = index;
+			continue;
+		}
+		if (character === " " || character === "\t") {
+			atWordStart = true;
 			continue;
 		}
 		if (
-			character === "`" ||
+			startsExecutableExpansion(command, index) ||
 			character === "(" ||
 			character === ")" ||
 			((character === "$" || character === "<" || character === ">") && command[index + 1] === "(")
 		) {
 			canAutoAllow = false;
+			atWordStart = false;
 			continue;
 		}
 
 		const operator = readControlOperator(command, index);
-		if (!operator) continue;
+		if (!operator) {
+			atWordStart = character === "<" || character === ">" || (character === "|" && command[index - 1] === ">");
+			continue;
+		}
 
-		const part = command.slice(start, index).trim();
+		const part = command.slice(start, commentStart ?? index).trim();
 		if (part) {
 			parts.push(part);
 			sawOperator = true;
@@ -149,11 +179,13 @@ function analyzeCommand(command: string): CommandAnalysis {
 		}
 		index += operator.length - 1;
 		start = index + 1;
+		commentStart = undefined;
+		atWordStart = true;
 	}
 
 	if (quote) canAutoAllow = false;
 
-	const finalPart = command.slice(start).trim();
+	const finalPart = command.slice(start, commentStart).trim();
 	if (finalPart) {
 		parts.push(finalPart);
 	} else if (!lastOperatorCanTerminate) {
