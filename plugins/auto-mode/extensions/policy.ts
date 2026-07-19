@@ -120,7 +120,7 @@ function splitCompoundCommand(command: string): string[] {
 	return parts;
 }
 
-export function decideManually(policy: PolicyConfig, command: string): ManualDecision {
+export function decideByPolicy(policy: PolicyConfig, command: string): ManualDecision {
 	const normalized = command.trim();
 	const parts = splitCompoundCommand(normalized);
 

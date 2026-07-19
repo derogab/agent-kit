@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { buildClassifierContext, parseClassifierDecision } from "./classifier.ts";
-import { decideManually, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
+import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 
@@ -88,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 
 		let manualDecision;
 		try {
-			manualDecision = decideManually(await loadPolicy(ctx), event.input.command);
+			manualDecision = decideByPolicy(await loadPolicy(ctx), event.input.command);
 		} catch (error) {
 			return {
 				block: true,
