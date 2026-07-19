@@ -38,6 +38,49 @@ test("regular expression rules match the full command string", () => {
 	assert.equal(decideManually(policy, "cd app && sudo make install"), "deny");
 });
 
+test("all commands joined by && must match allow rules", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^cd app$", "^npm test$"] }));
+	assert.equal(decideManually(policy, "cd app && npm test"), "allow");
+	assert.equal(decideManually(policy, "cd app && npm run build"), "ai");
+});
+
+test("a full-command allow match does not bypass chained command checks", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test(?:\\s|$)"] }));
+	assert.equal(decideManually(policy, "npm test && git push"), "ai");
+});
+
+test("all pipeline stages must match allow rules", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^wc -l$"] }));
+	assert.equal(decideManually(policy, "git status | wc -l"), "allow");
+	assert.equal(decideManually(policy, "git status | head"), "ai");
+});
+
+test("deny rules on a chained command take precedence", () => {
+	const policy = parsePolicyConfig(
+		JSON.stringify({
+			allow: ["^npm test$", "^git push$", "^npm test && git push$"],
+			deny: ["^git push$"],
+		}),
+	);
+	assert.equal(decideManually(policy, "npm test && git push"), "deny");
+});
+
+test("quoted and escaped operators are not command separators", () => {
+	const policy = parsePolicyConfig(
+		JSON.stringify({
+			allow: ["^printf 'left \\| right'$", "^printf 'left && right'$", "^printf left\\\\\\|right$", "^wc -c$"],
+		}),
+	);
+	assert.equal(decideManually(policy, "printf 'left | right' | wc -c"), "allow");
+	assert.equal(decideManually(policy, "printf 'left && right' && wc -c"), "allow");
+	assert.equal(decideManually(policy, "printf left\\|right | wc -c"), "allow");
+});
+
+test("|| is not treated as a pipeline", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^git diff$"] }));
+	assert.equal(decideManually(policy, "git status || git diff"), "ai");
+});
+
 test("invalid configuration fields and patterns are rejected", () => {
 	assert.throws(() => parsePolicyConfig('{"extra":[]}'), /unknown configuration field/);
 	assert.throws(() => parsePolicyConfig('{"allow":"git status"}'), /array of non-empty strings/);

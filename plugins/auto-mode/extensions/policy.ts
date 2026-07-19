@@ -57,13 +57,74 @@ function matchesPattern(patterns: string[], command: string): boolean {
 	return patterns.some((pattern) => new RegExp(pattern).test(command));
 }
 
+function splitCompoundCommand(command: string): string[] {
+	const parts: string[] = [];
+	let start = 0;
+	let quote: "'" | '"' | "`" | undefined;
+	let parenthesisDepth = 0;
+
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index];
+
+		if (quote) {
+			if (character === "\\" && quote !== "'") {
+				index += 1;
+			} else if (character === quote) {
+				quote = undefined;
+			}
+			continue;
+		}
+
+		if (character === "\\") {
+			if (index + 1 >= command.length) return [command];
+			index += 1;
+			continue;
+		}
+		if (character === "'" || character === '"' || character === "`") {
+			quote = character;
+			continue;
+		}
+		if (character === "(") {
+			parenthesisDepth += 1;
+			continue;
+		}
+		if (character === ")" && parenthesisDepth > 0) {
+			parenthesisDepth -= 1;
+			continue;
+		}
+		if (parenthesisDepth > 0) continue;
+
+		let operatorLength = 0;
+		if (character === "&" && command[index + 1] === "&") {
+			operatorLength = 2;
+		} else if (character === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
+			operatorLength = 1;
+		}
+		if (operatorLength === 0) continue;
+
+		const part = command.slice(start, index).trim();
+		if (!part) return [command];
+		parts.push(part);
+		index += operatorLength - 1;
+		start = index + 1;
+	}
+
+	if (quote || parenthesisDepth > 0) return [command];
+
+	const finalPart = command.slice(start).trim();
+	if (!finalPart) return [command];
+	parts.push(finalPart);
+	return parts;
+}
+
 export function decideManually(policy: PolicyConfig, command: string): ManualDecision {
 	const normalized = command.trim();
+	const parts = splitCompoundCommand(normalized);
 
-	if (matchesPattern(policy.deny, normalized)) {
+	if ([normalized, ...parts].some((part) => matchesPattern(policy.deny, part))) {
 		return "deny";
 	}
-	if (matchesPattern(policy.allow, normalized)) {
+	if (parts.every((part) => matchesPattern(policy.allow, part))) {
 		return "allow";
 	}
 	return "ai";
