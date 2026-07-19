@@ -17,10 +17,12 @@ This repository contains reusable plugins and skills for code agents.
 
 ## Supported Install Paths
 
-- When editing install or release docs, keep the two main install paths aligned: universal skills install and Claude Code marketplace/plugins install.
+- When editing install or release docs, keep the three main install paths aligned: universal skills, Pi npm packages, and Claude Code marketplace/plugins.
 - Universal docs should mention `skills.sh` and `npx skills add -g derogab/agent-kit`.
+- Pi plugin docs should mention `pi install npm:@derogab/pi-<plugin-name>`.
 - Claude Code docs should mention adding the `derogab/agent-kit` marketplace, then installing the needed plugins.
 - If asked to change a Claude Code plugin version, update the matching version in `.claude-plugin/marketplace.json`.
+- If asked to change a Pi plugin version, update its version in `plugins/<plugin-name>/package.json`.
 
 ## Working Rules
 
