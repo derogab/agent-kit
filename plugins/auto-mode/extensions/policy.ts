@@ -4,7 +4,7 @@ export interface PolicyConfig {
 	deny: string[];
 }
 
-export type ManualDecision = "allow" | "ask" | "deny" | "ai";
+export type PolicyDecision = "allow" | "ask" | "deny";
 
 const POLICY_KEYS = ["allow", "ask", "deny"] as const;
 
@@ -120,7 +120,7 @@ function splitCompoundCommand(command: string): string[] {
 	return parts;
 }
 
-export function decideByPolicy(policy: PolicyConfig, command: string): ManualDecision {
+export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDecision | undefined {
 	const normalized = command.trim();
 	const parts = splitCompoundCommand(normalized);
 
@@ -133,5 +133,5 @@ export function decideByPolicy(policy: PolicyConfig, command: string): ManualDec
 	if (parts.every((part) => matchesPattern(policy.allow, part))) {
 		return "allow";
 	}
-	return "ai";
+	return undefined;
 }

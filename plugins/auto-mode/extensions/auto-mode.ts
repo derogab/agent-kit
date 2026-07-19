@@ -33,7 +33,7 @@ async function loadPolicy(ctx: ExtensionContext) {
 	return mergePolicyConfigs(...(await Promise.all(paths.map(loadPolicyFile))));
 }
 
-async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"allow" | "ask" | "deny"> {
+async function decideByAi(command: string, ctx: ExtensionContext): Promise<"allow" | "ask" | "deny"> {
 	if (!ctx.model) {
 		throw new Error("no model is selected");
 	}
@@ -86,9 +86,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 
-		let manualDecision;
+		let policyDecision;
 		try {
-			manualDecision = decideByPolicy(await loadPolicy(ctx), event.input.command);
+			policyDecision = decideByPolicy(await loadPolicy(ctx), event.input.command);
 		} catch (error) {
 			return {
 				block: true,
@@ -96,48 +96,31 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 
-		if (manualDecision !== "ai") {
-			const allowed =
-				manualDecision === "allow" || (manualDecision === "ask" && (await confirmCommand(event.input.command, ctx)));
-			pi.appendEntry("auto-mode-result", {
-				command: event.input.command,
-				allowed,
-				source: "REGEX",
-			});
-			if (!allowed) {
+		let decision = policyDecision;
+		let source: "AI" | "REGEX" = "REGEX";
+		if (decision === undefined) {
+			source = "AI";
+			try {
+				decision = await decideByAi(event.input.command, ctx);
+			} catch (error) {
 				return {
 					block: true,
-					reason:
-						manualDecision === "ask"
-							? "Blocked because an auto-mode ask rule was not confirmed"
-							: "Blocked by an auto-mode deny rule",
+					reason: `Auto mode AI check failed: ${error instanceof Error ? error.message : String(error)}`,
 				};
 			}
-			return;
 		}
 
-		try {
-			const aiDecision = await checkWithAi(event.input.command, ctx);
-			const allowed =
-				aiDecision === "allow" || (aiDecision === "ask" && (await confirmCommand(event.input.command, ctx)));
-			pi.appendEntry("auto-mode-result", {
-				command: event.input.command,
-				allowed,
-				source: "AI",
-			});
-			if (!allowed) {
-				return {
-					block: true,
-					reason:
-						aiDecision === "ask"
-							? "Blocked because the auto-mode AI safety check was not confirmed"
-							: "Blocked by the auto-mode AI safety check",
-				};
-			}
-		} catch (error) {
+		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(event.input.command, ctx)));
+		pi.appendEntry("auto-mode-result", {
+			command: event.input.command,
+			allowed,
+			source,
+		});
+		if (!allowed) {
+			const decisionSource = source === "AI" ? "the auto-mode AI safety check" : `an auto-mode ${decision} rule`;
 			return {
 				block: true,
-				reason: `Auto mode AI check failed: ${error instanceof Error ? error.message : String(error)}`,
+				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
 			};
 		}
 	});

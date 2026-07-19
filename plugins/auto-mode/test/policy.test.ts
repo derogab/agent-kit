@@ -4,8 +4,8 @@ import test from "node:test";
 import { buildClassifierContext, parseClassifierDecision } from "../extensions/classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "../extensions/policy.ts";
 
-test("an empty configuration sends commands to the AI check", () => {
-	assert.equal(decideByPolicy(parsePolicyConfig("{}"), "git status"), "ai");
+test("an empty configuration has no policy decision", () => {
+	assert.equal(decideByPolicy(parsePolicyConfig("{}"), "git status"), undefined);
 });
 
 test("deny rules take precedence over allow rules", () => {
@@ -35,7 +35,7 @@ test("user and project rules are combined", () => {
 test("anchored patterns match exact commands after trimming whitespace", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test$"] }));
 	assert.equal(decideByPolicy(policy, "  npm test\n"), "allow");
-	assert.equal(decideByPolicy(policy, "npm test -- --watch"), "ai");
+	assert.equal(decideByPolicy(policy, "npm test -- --watch"), undefined);
 });
 
 test("regular expression rules match the full command string", () => {
@@ -52,18 +52,18 @@ test("regular expression rules match the full command string", () => {
 test("all commands joined by && must match allow rules", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^cd app$", "^npm test$"] }));
 	assert.equal(decideByPolicy(policy, "cd app && npm test"), "allow");
-	assert.equal(decideByPolicy(policy, "cd app && npm run build"), "ai");
+	assert.equal(decideByPolicy(policy, "cd app && npm run build"), undefined);
 });
 
 test("a full-command allow match does not bypass chained command checks", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test(?:\\s|$)"] }));
-	assert.equal(decideByPolicy(policy, "npm test && git push"), "ai");
+	assert.equal(decideByPolicy(policy, "npm test && git push"), undefined);
 });
 
 test("all pipeline stages must match allow rules", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^wc -l$"] }));
 	assert.equal(decideByPolicy(policy, "git status | wc -l"), "allow");
-	assert.equal(decideByPolicy(policy, "git status | head"), "ai");
+	assert.equal(decideByPolicy(policy, "git status | head"), undefined);
 });
 
 test("deny rules on a chained command take precedence", () => {
@@ -99,7 +99,7 @@ test("quoted and escaped operators are not command separators", () => {
 
 test("|| is not treated as a pipeline", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^git diff$"] }));
-	assert.equal(decideByPolicy(policy, "git status || git diff"), "ai");
+	assert.equal(decideByPolicy(policy, "git status || git diff"), undefined);
 });
 
 test("invalid configuration fields and patterns are rejected", () => {
