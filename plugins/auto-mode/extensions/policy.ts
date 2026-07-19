@@ -60,11 +60,44 @@ function matchesPattern(patterns: string[], command: string): boolean {
 	return patterns.some((pattern) => new RegExp(pattern).test(command));
 }
 
-function splitCompoundCommand(command: string): string[] {
+interface CommandAnalysis {
+	parts: string[];
+	canAutoAllow: boolean;
+}
+
+interface ControlOperator {
+	length: number;
+	canTerminate: boolean;
+}
+
+function readControlOperator(command: string, index: number): ControlOperator | undefined {
+	const rest = command.slice(index);
+	if (rest.startsWith(";;&")) return { length: 3, canTerminate: true };
+	if (rest.startsWith("&&") || rest.startsWith("||") || rest.startsWith("|&")) {
+		return { length: 2, canTerminate: false };
+	}
+	if (rest.startsWith(";;") || rest.startsWith(";&")) return { length: 2, canTerminate: true };
+	if (rest.startsWith(";")) return { length: 1, canTerminate: true };
+	if (rest.startsWith("|")) return { length: 1, canTerminate: false };
+	if (rest.startsWith("\n")) return { length: 1, canTerminate: true };
+	if (
+		rest.startsWith("&") &&
+		command[index - 1] !== ">" &&
+		command[index - 1] !== "<" &&
+		command[index + 1] !== ">"
+	) {
+		return { length: 1, canTerminate: true };
+	}
+	return undefined;
+}
+
+function analyzeCommand(command: string): CommandAnalysis {
 	const parts: string[] = [];
 	let start = 0;
-	let quote: "'" | '"' | "`" | undefined;
-	let parenthesisDepth = 0;
+	let quote: "'" | '"' | undefined;
+	let canAutoAllow = true;
+	let sawOperator = false;
+	let lastOperatorCanTerminate = false;
 
 	for (let index = 0; index < command.length; index += 1) {
 		const character = command[index];
@@ -74,55 +107,65 @@ function splitCompoundCommand(command: string): string[] {
 				index += 1;
 			} else if (character === quote) {
 				quote = undefined;
+			} else if (
+				quote === '"' &&
+				(character === "`" || (character === "$" && command[index + 1] === "("))
+			) {
+				canAutoAllow = false;
 			}
 			continue;
 		}
 
 		if (character === "\\") {
-			if (index + 1 >= command.length) return [command];
+			if (index + 1 >= command.length) canAutoAllow = false;
 			index += 1;
 			continue;
 		}
-		if (character === "'" || character === '"' || character === "`") {
+		if (character === "'" || character === '"') {
 			quote = character;
 			continue;
 		}
-		if (character === "(") {
-			parenthesisDepth += 1;
+		if (
+			character === "`" ||
+			character === "(" ||
+			character === ")" ||
+			((character === "$" || character === "<" || character === ">") && command[index + 1] === "(")
+		) {
+			canAutoAllow = false;
 			continue;
 		}
-		if (character === ")" && parenthesisDepth > 0) {
-			parenthesisDepth -= 1;
-			continue;
-		}
-		if (parenthesisDepth > 0) continue;
 
-		let operatorLength = 0;
-		if (character === "&" && command[index + 1] === "&") {
-			operatorLength = 2;
-		} else if (character === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
-			operatorLength = 1;
-		}
-		if (operatorLength === 0) continue;
+		const operator = readControlOperator(command, index);
+		if (!operator) continue;
 
 		const part = command.slice(start, index).trim();
-		if (!part) return [command];
-		parts.push(part);
-		index += operatorLength - 1;
+		if (part) {
+			parts.push(part);
+			sawOperator = true;
+			lastOperatorCanTerminate = operator.canTerminate;
+		} else if (character !== "\n" || !sawOperator) {
+			canAutoAllow = false;
+			lastOperatorCanTerminate = operator.canTerminate;
+		}
+		index += operator.length - 1;
 		start = index + 1;
 	}
 
-	if (quote || parenthesisDepth > 0) return [command];
+	if (quote) canAutoAllow = false;
 
 	const finalPart = command.slice(start).trim();
-	if (!finalPart) return [command];
-	parts.push(finalPart);
-	return parts;
+	if (finalPart) {
+		parts.push(finalPart);
+	} else if (!lastOperatorCanTerminate) {
+		canAutoAllow = false;
+	}
+	if (parts.length === 0) return { parts: [command], canAutoAllow: false };
+	return { parts, canAutoAllow };
 }
 
 export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDecision | undefined {
 	const normalized = command.trim();
-	const parts = splitCompoundCommand(normalized);
+	const { parts, canAutoAllow } = analyzeCommand(normalized);
 
 	if ([normalized, ...parts].some((part) => matchesPattern(policy.deny, part))) {
 		return "deny";
@@ -130,7 +173,7 @@ export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDec
 	if ([normalized, ...parts].some((part) => matchesPattern(policy.ask, part))) {
 		return "ask";
 	}
-	if (parts.every((part) => matchesPattern(policy.allow, part))) {
+	if (canAutoAllow && parts.every((part) => matchesPattern(policy.allow, part))) {
 		return "allow";
 	}
 	return undefined;

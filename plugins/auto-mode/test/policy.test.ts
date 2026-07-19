@@ -49,15 +49,27 @@ test("regular expression rules match the full command string", () => {
 	assert.equal(decideByPolicy(policy, "cd app && sudo make install"), "deny");
 });
 
-test("all commands joined by && must match allow rules", () => {
+test("all commands joined by control operators must match allow rules", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^cd app$", "^npm test$"] }));
-	assert.equal(decideByPolicy(policy, "cd app && npm test"), "allow");
-	assert.equal(decideByPolicy(policy, "cd app && npm run build"), undefined);
+	for (const operator of ["&&", "||", "|", "|&", ";", "&", "\n"]) {
+		assert.equal(decideByPolicy(policy, `cd app ${operator} npm test`), "allow", operator);
+		assert.equal(decideByPolicy(policy, `cd app ${operator} npm run build`), undefined, operator);
+	}
 });
 
-test("a full-command allow match does not bypass chained command checks", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test(?:\\s|$)"] }));
-	assert.equal(decideByPolicy(policy, "npm test && git push"), undefined);
+test("a full-command allow match does not bypass control operator checks", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
+	for (const command of [
+		"npm test && git push",
+		"npm test || git push",
+		"npm test | git push",
+		"npm test |& git push",
+		"npm test;git push",
+		"npm test & git push",
+		"npm test\ngit push",
+	]) {
+		assert.equal(decideByPolicy(policy, command), undefined, command);
+	}
 });
 
 test("all pipeline stages must match allow rules", () => {
@@ -86,20 +98,47 @@ test("ask rules on a chained command take precedence over allow rules", () => {
 	assert.equal(decideByPolicy(policy, "npm test && git push"), "ask");
 });
 
-test("quoted and escaped operators are not command separators", () => {
+test("quoted and escaped control operators are not command separators", () => {
 	const policy = parsePolicyConfig(
 		JSON.stringify({
-			allow: ["^printf 'left \\| right'$", "^printf 'left && right'$", "^printf left\\\\\\|right$", "^wc -c$"],
+			allow: [
+				"^printf 'left \\| right'$",
+				"^printf 'left && right'$",
+				"^printf 'left; right'$",
+				"^printf 'left || right'$",
+				"^printf 'left & right'$",
+				"^printf left\\\\\\|right$",
+				"^printf left\\\\;right$",
+				"^wc -c$",
+			],
 		}),
 	);
 	assert.equal(decideByPolicy(policy, "printf 'left | right' | wc -c"), "allow");
 	assert.equal(decideByPolicy(policy, "printf 'left && right' && wc -c"), "allow");
+	assert.equal(decideByPolicy(policy, "printf 'left; right'"), "allow");
+	assert.equal(decideByPolicy(policy, "printf 'left || right'"), "allow");
+	assert.equal(decideByPolicy(policy, "printf 'left & right'"), "allow");
 	assert.equal(decideByPolicy(policy, "printf left\\|right | wc -c"), "allow");
+	assert.equal(decideByPolicy(policy, "printf left\\;right"), "allow");
 });
 
-test("|| is not treated as a pipeline", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^git status$", "^git diff$"] }));
-	assert.equal(decideByPolicy(policy, "git status || git diff"), undefined);
+test("nested shell execution cannot be allowed by an outer-command pattern", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^(printf|cat)(?:\\s|$)", "^\\(git status\\)$"] }));
+	for (const command of [
+		"printf $(git push)",
+		'printf "$(git push)"',
+		"printf `git push`",
+		"cat <(git status)",
+		"(git status)",
+	]) {
+		assert.equal(decideByPolicy(policy, command), undefined, command);
+	}
+});
+
+test("redirection ampersands are not command separators", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test &>test.log$", "^npm test 2>&1$"] }));
+	assert.equal(decideByPolicy(policy, "npm test &>test.log"), "allow");
+	assert.equal(decideByPolicy(policy, "npm test 2>&1"), "allow");
 });
 
 test("invalid configuration fields and patterns are rejected", () => {
