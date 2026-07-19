@@ -1,0 +1,16 @@
+{
+  "allowCommands": [
+    "git status",
+    "git diff"
+  ],
+  "allowPatterns": [
+    "^npm (test|run (lint|build))(?:\\s|$)"
+  ],
+  "denyCommands": [
+    "git push --force"
+  ],
+  "denyPatterns": [
+    "(^|\\s)(sudo|doas)(\\s|$)",
+    "\\brm\\s+-rf\\b"
+  ]
+}

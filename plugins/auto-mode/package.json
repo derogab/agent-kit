@@ -1,0 +1,34 @@
+{
+  "name": "@derogab/pi-auto-mode",
+  "version": "0.1.0",
+  "description": "Automatically check Pi bash commands before execution",
+  "type": "module",
+  "files": [
+    "extensions",
+    "auto-mode.example.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/auto-mode"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/auto-mode.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
