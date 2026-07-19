@@ -1,6 +1,6 @@
 # dev
 
-A Claude Code plugin that provides skills to help with everyday development tasks.
+A plugin that provides skills to help with everyday development tasks.
 
 ## Skills
 
@@ -22,6 +22,12 @@ Install the individual skills with [skills.sh](https://skills.sh):
 npx skills add -g -y derogab/agent-kit@list-issues
 npx skills add -g -y derogab/agent-kit@redis
 npx skills add -g -y derogab/agent-kit@review-council
+```
+
+### Pi
+
+```bash
+pi install npm:@derogab/pi-dev
 ```
 
 ### Claude Code

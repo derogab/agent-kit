@@ -1,0 +1,36 @@
+name: Publish @derogab/pi-dev package
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - plugins/dev/package.json
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: plugins/dev
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Build package
+        run: |
+          mkdir -p .npm-package/skills
+          cp package.json README.md .npm-package/
+          cp -LR skills/. .npm-package/skills/
+      - run: npm pack .npm-package --dry-run
+      - run: npm publish .npm-package --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

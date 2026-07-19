@@ -1,0 +1,25 @@
+{
+  "name": "@derogab/pi-dev",
+  "version": "0.4.0",
+  "description": "Everyday development skills for Pi",
+  "files": [
+    "skills",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/dev"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}

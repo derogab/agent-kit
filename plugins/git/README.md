@@ -1,6 +1,6 @@
 # git
 
-A Claude Code plugin that provides skills to help with everyday Git tasks.
+A plugin that provides skills to help with everyday Git tasks.
 
 ## Skills
 
@@ -20,6 +20,12 @@ See the [skills documentation](../../skills/) for more details.
 npx skills add -g -y derogab/agent-kit@commit
 npx skills add -g -y derogab/agent-kit@pr
 npx skills add -g -y derogab/agent-kit@reply
+```
+
+### Pi
+
+```bash
+pi install npm:@derogab/pi-git
 ```
 
 ### Claude Code

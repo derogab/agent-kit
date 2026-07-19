@@ -23,6 +23,7 @@ This repository contains reusable plugins and skills for code agents.
 - Claude Code docs should mention adding the `derogab/agent-kit` marketplace, then installing the needed plugins.
 - If asked to change a Claude Code plugin version, update the matching version in `.claude-plugin/marketplace.json`.
 - If asked to change a Pi plugin version, update its version in `plugins/<plugin-name>/package.json`.
+- For plugins available on both Claude Code and Pi, keep the package version aligned.
 
 ## Working Rules
 
