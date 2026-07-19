@@ -30,6 +30,7 @@ jobs:
           mkdir -p .npm-package/skills
           cp package.json README.md .npm-package/
           cp -LR skills/. .npm-package/skills/
+          find .npm-package/skills -path '*/agents/openai.yaml' -delete
       - run: npm pack .npm-package --dry-run
       - run: npm publish .npm-package --provenance
         env:
