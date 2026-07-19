@@ -6,9 +6,8 @@ A Pi plugin that adds `/exit` as an alias for `/quit`, gracefully closing Pi.
 
 ### Pi
 
-Clone this repository, then install the plugin:
+Install the plugin from npm:
 
 ```bash
-git clone https://github.com/derogab/agent-kit.git
-pi install ./agent-kit/plugins/exit
+pi install npm:@derogab/pi-exit
 ```

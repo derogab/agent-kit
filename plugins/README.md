@@ -14,11 +14,10 @@ See each plugin's README for specific install instructions.
 
 ### Pi
 
-Clone this repository, then install the plugin you need:
+Install the Pi plugin you need:
 
 ```bash
-git clone https://github.com/derogab/agent-kit.git
-pi install ./agent-kit/plugins/exit
+pi install npm:@derogab/pi-exit
 ```
 
 ### Claude Code
