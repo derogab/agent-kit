@@ -4,11 +4,10 @@ A Pi plugin that automatically checks model-issued Bash commands before executio
 
 ## Decision order
 
-1. A deny pattern matching the full command or any safely separated part of a compound command blocks it.
-2. An ask pattern matching the full command or any safely separated part of a compound command requests user confirmation.
-3. A compound command runs when every safely separated command matches an allow pattern.
-4. Any other command matching an allow pattern runs it.
-5. An unmatched command, or one containing nested shell execution that cannot be safely separated, goes to a separate AI safety check.
+1. A matching deny pattern blocks the command.
+2. A matching ask pattern requests user confirmation.
+3. A command covered by allow patterns runs automatically.
+4. Anything the patterns cannot safely decide goes to a separate AI safety check.
 
 The AI check uses Pi's active model and credentials, but creates a fresh request containing only a fixed classifier prompt, the working directory, and the command. It does not include or modify the current conversation. An exact `ALLOW` response runs the command, `ASK` requests user confirmation, and `DENY` blocks it. Errors, invalid responses, declined confirmations, and ask decisions without an available UI also block the command. Decisions display the command in a green `✓` block for allow or a red `✗` block for deny, followed by `AI` or `REGEX` to identify the source.
 
@@ -43,6 +42,6 @@ Create `auto-mode.json` in either or both locations:
 }
 ```
 
-Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression tested against the full command after surrounding whitespace is removed. For compound commands, rules are also tested against each top-level command separated by Bash control operators such as `&&`, `||`, `|`, `|&`, `;`, newlines, and `&`. Quoted and escaped operators are not separators. Commands using subshells, command or process substitution, backticks, or other parenthesized shell syntax are never auto-allowed by regex; without a matching deny or ask rule, they go to the AI check instead. Use anchors such as `^git status$` for exact commands. Deny rules from either file take precedence over ask and allow rules; ask rules take precedence over allow rules. If both files are missing, all commands go to the AI check; if either file is invalid, commands are blocked until it is fixed.
+Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression. Deny rules from either file take precedence over ask and allow rules; ask rules take precedence over allow rules. If both files are missing, all commands go to the AI check; if either file is invalid, commands are blocked until it is fixed.
 
 This plugin gates Pi's built-in `bash` tool only. It is a lightweight permission check, not a sandbox or a guarantee of safety.
