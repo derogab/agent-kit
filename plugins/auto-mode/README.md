@@ -8,7 +8,7 @@ A Pi plugin that automatically checks model-issued Bash commands before executio
 2. A matching allow pattern runs the command.
 3. An unmatched command goes to a separate AI safety check.
 
-The AI check uses Pi's active model and credentials, but creates a fresh request containing only a fixed classifier prompt, the working directory, and the command. It does not include or modify the current conversation. Only an exact `ALLOW` response runs the command; errors and all other responses block it.
+The AI check uses Pi's active model and credentials, but creates a fresh request containing only a fixed classifier prompt, the working directory, and the command. It does not include or modify the current conversation. Only an exact `ALLOW` response runs the command; errors and all other responses block it. AI decisions display the command in a green `✓` block for allow or a red `✗` block for deny.
 
 ## Install
 

@@ -8,6 +8,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { buildClassifierContext, parseClassifierDecision } from "./classifier.ts";
 import { decideManually, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 
@@ -66,6 +67,13 @@ async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"all
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerEntryRenderer<{ command: string; allowed: boolean }>("auto-mode-result", (entry, _options, theme) => {
+		const result = entry.data ?? { command: "", allowed: false };
+		const box = new Box(1, 0, (text) => theme.bg(result.allowed ? "toolSuccessBg" : "toolErrorBg", text));
+		box.addChild(new Text(`${result.command} ${result.allowed ? "✓" : "✗"}`, 0, 0));
+		return box;
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 
@@ -86,6 +94,10 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			const aiDecision = await checkWithAi(event.input.command, ctx);
+			pi.appendEntry("auto-mode-result", {
+				command: event.input.command,
+				allowed: aiDecision === "allow",
+			});
 			if (aiDecision === "deny") {
 				return { block: true, reason: "Blocked by the auto-mode AI safety check" };
 			}
