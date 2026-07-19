@@ -4,6 +4,9 @@
     "^git diff$",
     "^npm (test|run (lint|build))(?:\\s|$)"
   ],
+  "ask": [
+    "^git push(?:\\s|$)"
+  ],
   "deny": [
     "^git push --force$",
     "(^|\\s)(sudo|doas)(\\s|$)",

@@ -1,11 +1,12 @@
 export interface PolicyConfig {
 	allow: string[];
+	ask: string[];
 	deny: string[];
 }
 
-export type ManualDecision = "allow" | "deny" | "ai";
+export type ManualDecision = "allow" | "ask" | "deny" | "ai";
 
-const POLICY_KEYS = ["allow", "deny"] as const;
+const POLICY_KEYS = ["allow", "ask", "deny"] as const;
 
 function readStringArray(config: Record<string, unknown>, key: (typeof POLICY_KEYS)[number]): string[] {
 	const value = config[key];
@@ -30,6 +31,7 @@ export function parsePolicyConfig(source: string): PolicyConfig {
 
 	const policy = {
 		allow: readStringArray(config, "allow"),
+		ask: readStringArray(config, "ask"),
 		deny: readStringArray(config, "deny"),
 	};
 
@@ -49,6 +51,7 @@ export function parsePolicyConfig(source: string): PolicyConfig {
 export function mergePolicyConfigs(...policies: PolicyConfig[]): PolicyConfig {
 	return {
 		allow: policies.flatMap((policy) => policy.allow),
+		ask: policies.flatMap((policy) => policy.ask),
 		deny: policies.flatMap((policy) => policy.deny),
 	};
 }
@@ -123,6 +126,9 @@ export function decideManually(policy: PolicyConfig, command: string): ManualDec
 
 	if ([normalized, ...parts].some((part) => matchesPattern(policy.deny, part))) {
 		return "deny";
+	}
+	if ([normalized, ...parts].some((part) => matchesPattern(policy.ask, part))) {
+		return "ask";
 	}
 	if (parts.every((part) => matchesPattern(policy.allow, part))) {
 		return "allow";

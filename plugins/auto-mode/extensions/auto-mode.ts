@@ -33,7 +33,7 @@ async function loadPolicy(ctx: ExtensionContext) {
 	return mergePolicyConfigs(...(await Promise.all(paths.map(loadPolicyFile))));
 }
 
-async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"allow" | "deny"> {
+async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"allow" | "ask" | "deny"> {
 	if (!ctx.model) {
 		throw new Error("no model is selected");
 	}
@@ -62,9 +62,14 @@ async function checkWithAi(command: string, ctx: ExtensionContext): Promise<"all
 		.join("");
 	const decision = parseClassifierDecision(text);
 	if (!decision) {
-		throw new Error("classifier did not return ALLOW or DENY");
+		throw new Error("classifier did not return ALLOW, ASK, or DENY");
 	}
 	return decision;
+}
+
+async function confirmCommand(command: string, ctx: ExtensionContext): Promise<boolean> {
+	if (!ctx.hasUI) return false;
+	return ctx.ui.confirm("Allow Bash command?", command);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -92,27 +97,42 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (manualDecision !== "ai") {
-			const allowed = manualDecision === "allow";
+			const allowed =
+				manualDecision === "allow" || (manualDecision === "ask" && (await confirmCommand(event.input.command, ctx)));
 			pi.appendEntry("auto-mode-result", {
 				command: event.input.command,
 				allowed,
 				source: "REGEX",
 			});
 			if (!allowed) {
-				return { block: true, reason: "Blocked by an auto-mode deny rule" };
+				return {
+					block: true,
+					reason:
+						manualDecision === "ask"
+							? "Blocked because an auto-mode ask rule was not confirmed"
+							: "Blocked by an auto-mode deny rule",
+				};
 			}
 			return;
 		}
 
 		try {
 			const aiDecision = await checkWithAi(event.input.command, ctx);
+			const allowed =
+				aiDecision === "allow" || (aiDecision === "ask" && (await confirmCommand(event.input.command, ctx)));
 			pi.appendEntry("auto-mode-result", {
 				command: event.input.command,
-				allowed: aiDecision === "allow",
+				allowed,
 				source: "AI",
 			});
-			if (aiDecision === "deny") {
-				return { block: true, reason: "Blocked by the auto-mode AI safety check" };
+			if (!allowed) {
+				return {
+					block: true,
+					reason:
+						aiDecision === "ask"
+							? "Blocked because the auto-mode AI safety check was not confirmed"
+							: "Blocked by the auto-mode AI safety check",
+				};
 			}
 		} catch (error) {
 			return {
