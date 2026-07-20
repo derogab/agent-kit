@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildClassifierContext, parseClassifierDecision } from "../extensions/classifier.ts";
@@ -103,14 +103,39 @@ test("targets that do not exist yet are judged by where creation would land", (t
 		boundary: "cwd",
 	});
 	assert.doesNotThrow(() => buildClassifierContext("mkdir -p nested/dir", cwd));
-	assert.doesNotThrow(() => buildClassifierContext("run --output=nested/new.log", cwd));
+	const optionContext = buildClassifierContext("run --output=nested/new.log", cwd);
+	const optionInput = JSON.parse(optionContext.messages[0].content[0].text);
+	assert.deepEqual(optionInput.filesystemCandidates.at(-1), {
+		value: "--output=nested/new.log",
+		role: "argument",
+		status: "resolved",
+		canonicalPath: join(realpathSync(cwd), "nested/new.log"),
+		boundary: "cwd",
+	});
+	assert.doesNotThrow(() => buildClassifierContext(`echo hi > /tmp/${basename(root)}/new.log`, cwd));
 
 	assert.throws(() => buildClassifierContext("echo hi > ../escape.log", cwd), /resolves outside/);
 	assert.throws(() => buildClassifierContext("run --output=/etc/new-file", cwd), /resolves outside/);
+	assert.throws(() => buildClassifierContext("tar -cf../outside.tar README.md", cwd), /cannot be resolved safely/);
 
 	// Creation through a symlinked directory lands at the link target, not the lexical path.
 	symlinkSync(root, join(cwd, "linked-dir"));
 	assert.throws(() => buildClassifierContext("echo hi > linked-dir/new-file", cwd), /resolves outside/);
+	assert.throws(() => buildClassifierContext("echo hi > linked-dir/../new-file", cwd), /resolves outside/);
+
+	// Option values are resolved as their actual operands, while ambiguous attached values stay unavailable.
+	const outsideList = join(root, "outside-list");
+	writeFileSync(outsideList, "outside");
+	symlinkSync(outsideList, join(cwd, "linked-list"));
+	assert.throws(() => buildClassifierContext("tar --files-from=linked-list -cf archive.tar", cwd), /resolves outside/);
+	const attachedContext = buildClassifierContext("run -olinked-list", cwd);
+	const attachedInput = JSON.parse(attachedContext.messages[0].content[0].text);
+	assert.deepEqual(attachedInput.filesystemCandidates[1], {
+		value: "-olinked-list",
+		role: "argument",
+		status: "unavailable",
+		exists: false,
+	});
 
 	// A dangling symlink target still fails closed.
 	symlinkSync(join(root, "missing"), join(cwd, "dangling"));
