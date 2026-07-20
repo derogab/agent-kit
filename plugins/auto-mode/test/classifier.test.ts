@@ -105,10 +105,23 @@ test("directory-changing commands fail closed instead of resolving later operand
 	writeFileSync(outsideFile, "outside");
 	symlinkSync(outsideFile, join(subdirectory, "linked-file"));
 
-	assert.throws(
-		() => buildClassifierContext("cd subdirectory && cat linked-file", cwd),
-		/directory-changing commands cannot be classified safely/,
-	);
+	for (const command of [
+		"cd subdirectory && cat linked-file",
+		"command cd subdirectory && cat linked-file",
+		"builtin cd subdirectory && cat linked-file",
+		"if cd subdirectory; then cat linked-file; fi",
+		"time cd subdirectory && cat linked-file",
+		"{ cd subdirectory; cat linked-file; }",
+	]) {
+		assert.throws(
+			() => buildClassifierContext(command, cwd),
+			/directory-changing commands cannot be classified safely/,
+			command,
+		);
+	}
+
+	// A literal `cd` that is not in command position must not fail closed.
+	assert.doesNotThrow(() => buildClassifierContext("grep cd linked-file", cwd));
 });
 
 test("only exact classifier decisions are accepted", () => {

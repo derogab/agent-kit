@@ -23,6 +23,24 @@ interface ShellWord {
 	role: "argument" | "executable" | "redirection" | "syntax";
 }
 
+// Shell keywords/builtins that run their next word as a command in the current shell, so a directory
+// change laundered through them (e.g. `command cd`, `if cd; then`) still affects later operands.
+const COMMAND_PREFIXES = new Set([
+	"command",
+	"builtin",
+	"exec",
+	"time",
+	"!",
+	"{",
+	"if",
+	"then",
+	"else",
+	"elif",
+	"while",
+	"until",
+	"do",
+]);
+
 type FilesystemCandidate =
 	| {
 			value: string;
@@ -63,7 +81,7 @@ function readShellWords(command: string): ShellWord[] {
 				pendingRedirection = undefined;
 			} else if (expectExecutable && !/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(value)) {
 				role = "executable";
-				expectExecutable = false;
+				expectExecutable = COMMAND_PREFIXES.has(value);
 			} else {
 				role = "argument";
 			}
