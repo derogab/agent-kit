@@ -23,7 +23,13 @@ test("the classifier receives its fixed prompt, command, cwd, and filesystem sta
 		cwd: realpathSync(cwd),
 		filesystemCandidates: [
 			{ value: "npm", role: "executable", status: "unavailable", exists: false },
-			{ value: "test", role: "argument", status: "unavailable", exists: false },
+			{
+				value: "test",
+				role: "argument",
+				status: "resolved",
+				canonicalPath: join(realpathSync(cwd), "test"),
+				boundary: "cwd",
+			},
 		],
 	});
 });
@@ -64,18 +70,51 @@ test("symlinks whose targets remain in the working directory are identified as i
 	});
 });
 
-test("missing and dynamically expanded candidates fail closed", (t) => {
+test("dynamically expanded candidates fail closed while missing static targets resolve to their creation site", (t) => {
 	const { cwd } = createFixture(t);
 	const context = buildClassifierContext('cat missing-file "$TARGET"', cwd);
 	const classifierInput = JSON.parse(context.messages[0].content[0].text);
 
 	assert.deepEqual(classifierInput.filesystemCandidates.slice(1), [
-		{ value: "missing-file", role: "argument", status: "unavailable", exists: false },
+		{
+			value: "missing-file",
+			role: "argument",
+			status: "resolved",
+			canonicalPath: join(realpathSync(cwd), "missing-file"),
+			boundary: "cwd",
+		},
 		{ value: "$TARGET", role: "argument", status: "ambiguous" },
 	]);
 	assert.match(context.systemPrompt, /DENY if a target has status "ambiguous" or "unavailable"/);
-	assert.throws(() => buildClassifierContext("cat ./missing-file", cwd), /cannot be resolved safely/);
+	assert.doesNotThrow(() => buildClassifierContext("cat ./missing-file", cwd));
 	assert.throws(() => buildClassifierContext('cat "$TARGET/file"', cwd), /cannot be resolved safely/);
+});
+
+test("targets that do not exist yet are judged by where creation would land", (t) => {
+	const { root, cwd } = createFixture(t);
+	const context = buildClassifierContext("npm test > test.log", cwd);
+	const classifierInput = JSON.parse(context.messages[0].content[0].text);
+
+	assert.deepEqual(classifierInput.filesystemCandidates.at(-1), {
+		value: "test.log",
+		role: "redirection",
+		status: "resolved",
+		canonicalPath: join(realpathSync(cwd), "test.log"),
+		boundary: "cwd",
+	});
+	assert.doesNotThrow(() => buildClassifierContext("mkdir -p nested/dir", cwd));
+	assert.doesNotThrow(() => buildClassifierContext("run --output=nested/new.log", cwd));
+
+	assert.throws(() => buildClassifierContext("echo hi > ../escape.log", cwd), /resolves outside/);
+	assert.throws(() => buildClassifierContext("run --output=/etc/new-file", cwd), /resolves outside/);
+
+	// Creation through a symlinked directory lands at the link target, not the lexical path.
+	symlinkSync(root, join(cwd, "linked-dir"));
+	assert.throws(() => buildClassifierContext("echo hi > linked-dir/new-file", cwd), /resolves outside/);
+
+	// A dangling symlink target still fails closed.
+	symlinkSync(join(root, "missing"), join(cwd, "dangling"));
+	assert.throws(() => buildClassifierContext("echo hi > dangling", cwd), /cannot be resolved safely/);
 });
 
 test("file descriptor duplication is shell syntax, not a filesystem target", (t) => {
@@ -92,7 +131,7 @@ test("file descriptor duplication is shell syntax, not a filesystem target", (t)
 			{ value: "2-", role: "syntax", status: "unavailable", exists: false },
 		],
 	);
-	assert.throws(() => buildClassifierContext("printf output >&missing", cwd), /cannot be resolved safely/);
+	assert.doesNotThrow(() => buildClassifierContext("printf output >&missing", cwd));
 	assert.throws(() => buildClassifierContext('printf output >&"$TARGET"', cwd), /cannot be resolved safely/);
 });
 
@@ -112,6 +151,8 @@ test("directory-changing commands fail closed instead of resolving later operand
 		"if cd subdirectory; then cat linked-file; fi",
 		"time cd subdirectory && cat linked-file",
 		"{ cd subdirectory; cat linked-file; }",
+		"function relocate { cd subdirectory; }; relocate; cat linked-file",
+		"function relocate() { cd subdirectory; }; relocate; cat linked-file",
 	]) {
 		assert.throws(
 			() => buildClassifierContext(command, cwd),
@@ -122,6 +163,8 @@ test("directory-changing commands fail closed instead of resolving later operand
 
 	// A literal `cd` that is not in command position must not fail closed.
 	assert.doesNotThrow(() => buildClassifierContext("grep cd linked-file", cwd));
+	// A function definition without a directory change must not fail closed either.
+	assert.doesNotThrow(() => buildClassifierContext("function helper { printf hi; }; helper", cwd));
 });
 
 test("only exact classifier decisions are accepted", () => {
