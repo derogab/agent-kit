@@ -77,6 +77,16 @@ test("nested execution syntax never receives a regex allow", () => {
 	]);
 });
 
+test("prompt-string parameter transformations never receive a regex allow", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"] }));
+	assertFallsThrough(policy, [
+		"printf '%s' ${value@P}",
+		'printf \'%s\' "${value@P}"',
+		"printf '%s' ${!value@P}",
+		"printf '%s' ${values[${index}]@P}",
+	]);
+});
+
 test("quoted and escaped shell syntax remains literal", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"] }));
 	for (const command of [
@@ -85,6 +95,7 @@ test("quoted and escaped shell syntax remains literal", () => {
 		"printf '%s' '$((1 + 1))'",
 		"printf '%s' '$[1 + 1]'",
 		"printf '%s' '${ git push; }'",
+		"printf '%s' '${value@P}'",
 		"printf '%s' '<(git push)'",
 		"printf '%s' $'left; git push'",
 		'printf "%s" "${HOME}"',
@@ -94,6 +105,7 @@ test("quoted and escaped shell syntax remains literal", () => {
 		"printf '%s' left\\&git\\ push",
 		'printf "%s" "<(git push)"',
 		'printf "%s" "\\$(git push)"',
+		'printf "%s" "\\${value@P}"',
 	]) {
 		assert.equal(decideByPolicy(policy, command), "allow", command);
 	}

@@ -9,7 +9,7 @@ A Pi plugin that automatically checks model-issued Bash commands before executio
 3. A command covered by allow patterns runs automatically.
 4. Anything the patterns cannot safely decide goes to a separate AI safety check.
 
-The AI check uses Pi's active model and credentials, but creates a fresh request containing only a fixed classifier prompt, the working directory, and the command. It does not include or modify the current conversation. An exact `ALLOW` response runs the command, `ASK` requests user confirmation, and `DENY` blocks it. Errors, invalid responses, declined confirmations, and ask decisions without an available UI also block the command. Decisions display the command in a green `✓` block for allow or a red `✗` block for deny, followed by `AI` or `REGEX` to identify the source.
+The AI check uses Pi's active model and credentials, but creates a fresh request containing only a fixed classifier prompt, the working directory, the command, and host-resolved filesystem candidate metadata. It does not include or modify the current conversation. An exact `ALLOW` response runs the command, `ASK` requests user confirmation, and `DENY` blocks it. Errors, invalid responses, declined confirmations, and ask decisions without an available UI also block the command. Decisions display the command in a green `✓` block for allow or a red `✗` block for deny, followed by `AI` or `REGEX` to identify the source.
 
 ## Install
 
@@ -37,7 +37,7 @@ Create `auto-mode.json` in either or both locations:
   "deny": [
     "^git push --force$",
     "(^|\\s)(sudo|doas)(\\s|$)",
-    "\\brm\\s+-rf\\b"
+    "\\brm\\b\\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+"
   ]
 }
 ```

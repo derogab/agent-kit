@@ -10,6 +10,6 @@
   "deny": [
     "^git push --force$",
     "(^|\\s)(sudo|doas)(\\s|$)",
-    "\\brm\\s+-rf\\b"
+    "\\brm\\b\\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+"
   ]
 }

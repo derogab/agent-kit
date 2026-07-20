@@ -73,4 +73,7 @@ test("the packaged example is valid", async () => {
 	assert.equal(decideByPolicy(policy, "git status"), "allow");
 	assert.equal(decideByPolicy(policy, "git push"), "ask");
 	assert.equal(decideByPolicy(policy, "sudo make install"), "deny");
+	for (const command of ["rm -rf /tmp/example", "rm -rfx /tmp/example", "rm -fr /tmp/example", "rm -xrf /tmp/example"]) {
+		assert.equal(decideByPolicy(policy, command), "deny", command);
+	}
 });

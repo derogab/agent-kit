@@ -11,6 +11,7 @@ import {
 import { Box, Text } from "@earendil-works/pi-tui";
 import { buildClassifierContext, parseClassifierDecision } from "./classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
+import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 
@@ -69,7 +70,7 @@ async function decideByAi(command: string, ctx: ExtensionContext): Promise<"allo
 
 async function confirmCommand(command: string, ctx: ExtensionContext): Promise<boolean> {
 	if (!ctx.hasUI) return false;
-	return ctx.ui.confirm("Allow Bash command?", command);
+	return ctx.ui.confirm("Allow Bash command?", sanitizeTerminalText(command));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -78,7 +79,9 @@ export default function (pi: ExtensionAPI) {
 		(entry, _options, theme) => {
 			const result = entry.data ?? { command: "", allowed: false, source: "AI" };
 			const box = new Box(1, 0, (text) => theme.bg(result.allowed ? "toolSuccessBg" : "toolErrorBg", text));
-			box.addChild(new Text(`${result.command} ${result.allowed ? "✓" : "✗"} ${result.source}`, 0, 0));
+			box.addChild(
+				new Text(`${sanitizeTerminalText(result.command)} ${result.allowed ? "✓" : "✗"} ${result.source}`, 0, 0),
+			);
 			return box;
 		},
 	);
@@ -123,5 +126,8 @@ export default function (pi: ExtensionAPI) {
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
 			};
 		}
+
+		// Later tool_call handlers receive this same input object, so pin the command that was checked.
+		lockBashCommand(event.input);
 	});
 }

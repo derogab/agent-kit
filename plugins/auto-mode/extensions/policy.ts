@@ -101,7 +101,36 @@ function startsExecutableExpansion(command: string, index: number): boolean {
 	if (next !== "{") return false;
 
 	const marker = command[index + 2];
-	return marker === "|" || marker === " " || marker === "\t" || marker === "\n";
+	if (marker === "|" || marker === " " || marker === "\t" || marker === "\n") return true;
+
+	let depth = 1;
+	let quote: "'" | '"' | undefined;
+	for (let cursor = index + 2; cursor < command.length; cursor += 1) {
+		const character = command[cursor];
+		if (character === "\\") {
+			cursor += 1;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (character === "$" && command[cursor + 1] === "{") {
+			depth += 1;
+			cursor += 1;
+			continue;
+		}
+		if (character !== "}") continue;
+
+		depth -= 1;
+		if (depth === 0) return command.slice(index + 2, cursor).endsWith("@P");
+	}
+
+	return false;
 }
 
 function analyzeCommand(command: string): CommandAnalysis {
