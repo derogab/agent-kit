@@ -78,6 +78,39 @@ test("missing and dynamically expanded candidates fail closed", (t) => {
 	assert.throws(() => buildClassifierContext('cat "$TARGET/file"', cwd), /cannot be resolved safely/);
 });
 
+test("file descriptor duplication is shell syntax, not a filesystem target", (t) => {
+	const { cwd } = createFixture(t);
+	const context = buildClassifierContext("printf output 2>&1; cat <&0; printf close >&-; cat 3<&2-", cwd);
+	const classifierInput = JSON.parse(context.messages[0].content[0].text);
+
+	assert.deepEqual(
+		classifierInput.filesystemCandidates.filter((candidate: { role: string }) => candidate.role === "syntax"),
+		[
+			{ value: "1", role: "syntax", status: "unavailable", exists: false },
+			{ value: "0", role: "syntax", status: "unavailable", exists: false },
+			{ value: "-", role: "syntax", status: "unavailable", exists: false },
+			{ value: "2-", role: "syntax", status: "unavailable", exists: false },
+		],
+	);
+	assert.throws(() => buildClassifierContext("printf output >&missing", cwd), /cannot be resolved safely/);
+	assert.throws(() => buildClassifierContext('printf output >&"$TARGET"', cwd), /cannot be resolved safely/);
+});
+
+test("directory-changing commands fail closed instead of resolving later operands against stale cwd", (t) => {
+	const { root, cwd } = createFixture(t);
+	const subdirectory = join(cwd, "subdirectory");
+	const outsideFile = join(root, "outside-file");
+	mkdirSync(subdirectory);
+	writeFileSync(join(cwd, "linked-file"), "inside");
+	writeFileSync(outsideFile, "outside");
+	symlinkSync(outsideFile, join(subdirectory, "linked-file"));
+
+	assert.throws(
+		() => buildClassifierContext("cd subdirectory && cat linked-file", cwd),
+		/directory-changing commands cannot be classified safely/,
+	);
+});
+
 test("only exact classifier decisions are accepted", () => {
 	assert.equal(parseClassifierDecision(" ALLOW\n"), "allow");
 	assert.equal(parseClassifierDecision("ASK"), "ask");

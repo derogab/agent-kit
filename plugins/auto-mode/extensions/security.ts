@@ -1,7 +1,8 @@
-const TERMINAL_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
+const UNSAFE_TERMINAL_CHARACTER =
+	/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 export function sanitizeTerminalText(text: string): string {
-	return text.replace(TERMINAL_CONTROL_CHARACTER, (character) => {
+	return text.replace(UNSAFE_TERMINAL_CHARACTER, (character) => {
 		switch (character) {
 			case "\n":
 				return "\\n";

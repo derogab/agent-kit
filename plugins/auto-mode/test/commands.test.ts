@@ -84,6 +84,7 @@ test("prompt-string parameter transformations never receive a regex allow", () =
 		'printf \'%s\' "${value@P}"',
 		"printf '%s' ${!value@P}",
 		"printf '%s' ${values[${index}]@P}",
+		'printf \'%s\' "${values[foo}bar]@P}"',
 	]);
 });
 
@@ -96,6 +97,7 @@ test("quoted and escaped shell syntax remains literal", () => {
 		"printf '%s' '$[1 + 1]'",
 		"printf '%s' '${ git push; }'",
 		"printf '%s' '${value@P}'",
+		"printf '%s' '${values[foo}bar]@P}'",
 		"printf '%s' '<(git push)'",
 		"printf '%s' $'left; git push'",
 		'printf "%s" "${HOME}"',
@@ -106,6 +108,7 @@ test("quoted and escaped shell syntax remains literal", () => {
 		'printf "%s" "<(git push)"',
 		'printf "%s" "\\$(git push)"',
 		'printf "%s" "\\${value@P}"',
+		'printf "%s" "\\${values[foo}bar]@P}"',
 	]) {
 		assert.equal(decideByPolicy(policy, command), "allow", command);
 	}

@@ -50,12 +50,15 @@ function readShellWords(command: string): ShellWord[] {
 	let quote: "'" | '"' | undefined;
 	let active = false;
 	let expectExecutable = true;
-	let pendingRedirection: "redirection" | "syntax" | undefined;
+	let pendingRedirection: "redirection" | "descriptor" | "syntax" | undefined;
 
 	const finishWord = () => {
 		if (active) {
 			let role: ShellWord["role"];
-			if (pendingRedirection) {
+			if (pendingRedirection === "descriptor") {
+				role = staticWord && /^(?:[0-9]+-?|-)$/.test(value) ? "syntax" : "redirection";
+				pendingRedirection = undefined;
+			} else if (pendingRedirection) {
 				role = pendingRedirection;
 				pendingRedirection = undefined;
 			} else if (expectExecutable && !/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(value)) {
@@ -112,9 +115,14 @@ function readShellWords(command: string): ShellWord[] {
 		if (character === "<" || character === ">") {
 			finishWord();
 			const hereDocument = character === "<" && command[index + 1] === "<";
-			pendingRedirection = hereDocument ? "syntax" : "redirection";
-			while (command[index + 1] === "<" || command[index + 1] === ">" || command[index + 1] === "-") {
+			const descriptorDuplication = !hereDocument && command[index + 1] === "&";
+			pendingRedirection = hereDocument ? "syntax" : descriptorDuplication ? "descriptor" : "redirection";
+			if (descriptorDuplication) {
 				index += 1;
+			} else {
+				while (command[index + 1] === "<" || command[index + 1] === ">" || command[index + 1] === "-") {
+					index += 1;
+				}
 			}
 			continue;
 		}
@@ -166,8 +174,8 @@ function isWithin(root: string, target: string): boolean {
 	return pathFromRoot === "" || (!isAbsolute(pathFromRoot) && pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`));
 }
 
-function resolveFilesystemCandidates(command: string, cwd: string, temporaryDirectory: string): FilesystemCandidate[] {
-	return readShellWords(command).map((word) => {
+function resolveFilesystemCandidates(words: ShellWord[], cwd: string, temporaryDirectory: string): FilesystemCandidate[] {
+	return words.map((word) => {
 		if (!word.static) return { value: word.value, role: word.role, status: "ambiguous" };
 
 		const lexicalPath = resolve(cwd, word.value);
@@ -203,7 +211,11 @@ function isClearlyPathLike(value: string): boolean {
 export function buildClassifierContext(command: string, cwd: string) {
 	const canonicalCwd = realpathSync(cwd);
 	const canonicalTemporaryDirectory = realpathSync("/tmp");
-	const filesystemCandidates = resolveFilesystemCandidates(command, canonicalCwd, canonicalTemporaryDirectory);
+	const shellWords = readShellWords(command);
+	if (shellWords.some((word) => word.role === "executable" && ["cd", "pushd", "popd"].includes(word.value))) {
+		throw new Error("directory-changing commands cannot be classified safely");
+	}
+	const filesystemCandidates = resolveFilesystemCandidates(shellWords, canonicalCwd, canonicalTemporaryDirectory);
 
 	for (const candidate of filesystemCandidates) {
 		if (candidate.role === "executable" || candidate.role === "syntax") continue;
