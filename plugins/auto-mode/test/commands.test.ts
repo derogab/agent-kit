@@ -99,6 +99,30 @@ test("quoted and escaped shell syntax remains literal", () => {
 	}
 });
 
+test("ansi-c quoting cannot desync quote tracking to hide commands", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
+	assertFallsThrough(policy, [
+		"npm test $'\\'' && git push #'",
+		"npm test $'\\'' ; git push #'",
+		"npm test $'\\'' | git push #'",
+		"npm test $'\\'' $(git push) #'",
+		"npm test $'unterminated",
+		"npm test $'trailing backslash \\",
+	]);
+});
+
+test("ansi-c quoted arguments stay literal when balanced", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"] }));
+	for (const command of [
+		"printf '%s' $'left; git push'",
+		"printf '%s' $'a\\'b'",
+		"printf '%s' $'tab\\tand; git push'",
+		"printf '%s' $'\\x27; git push'",
+	]) {
+		assert.equal(decideByPolicy(policy, command), "allow", command);
+	}
+});
+
 test("comments cannot hide commands on following lines", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
 	assert.equal(decideByPolicy(policy, "npm test # harmless comment"), "allow");

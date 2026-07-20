@@ -108,6 +108,7 @@ function analyzeCommand(command: string): CommandAnalysis {
 	const parts: string[] = [];
 	let start = 0;
 	let quote: "'" | '"' | undefined;
+	let ansiQuote = false;
 	let commentStart: number | undefined;
 	let atWordStart = true;
 	let canAutoAllow = true;
@@ -122,10 +123,11 @@ function analyzeCommand(command: string): CommandAnalysis {
 		}
 
 		if (quote) {
-			if (character === "\\" && quote !== "'") {
+			if (character === "\\" && (quote !== "'" || ansiQuote)) {
 				index += 1;
 			} else if (character === quote) {
 				quote = undefined;
+				ansiQuote = false;
 			} else if (quote === '"' && startsExecutableExpansion(command, index)) {
 				canAutoAllow = false;
 			}
@@ -135,6 +137,13 @@ function analyzeCommand(command: string): CommandAnalysis {
 		if (character === "\\") {
 			if (index + 1 >= command.length) canAutoAllow = false;
 			if (command[index + 1] !== "\n") atWordStart = false;
+			index += 1;
+			continue;
+		}
+		if (character === "$" && command[index + 1] === "'") {
+			quote = "'";
+			ansiQuote = true;
+			atWordStart = false;
 			index += 1;
 			continue;
 		}
