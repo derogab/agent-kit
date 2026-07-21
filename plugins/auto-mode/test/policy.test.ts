@@ -56,7 +56,7 @@ test("invalid configuration shapes are rejected", () => {
 		'{"extra":[]}',
 		'{"__proto__":[]}',
 	]) {
-		assert.throws(() => parsePolicyConfig(source), undefined, source);
+		assert.throws(() => parsePolicyConfig(source), source);
 	}
 });
 

@@ -66,6 +66,7 @@ interface CommandAnalysis {
 	parts: string[];
 	nestedParts: string[];
 	canAutoAllow: boolean;
+	failClosed: boolean;
 }
 
 interface ControlOperator {
@@ -99,8 +100,17 @@ function readParenthesized(command: string, openingParenthesis: number) {
 	let depth = 1;
 	let quote: "'" | '"' | undefined;
 	let ansiQuote = false;
+	let comment = false;
+	let atWordStart = true;
+	const wordExpansionParentheses: boolean[] = [];
 	for (let cursor = openingParenthesis + 1; cursor < command.length; cursor += 1) {
 		const character = command[cursor];
+		if (comment) {
+			if (character !== "\n") continue;
+			comment = false;
+			atWordStart = true;
+			continue;
+		}
 		if (quote) {
 			if (character === "\\" && (quote === '"' || ansiQuote)) cursor += 1;
 			else if (character === quote) {
@@ -110,23 +120,45 @@ function readParenthesized(command: string, openingParenthesis: number) {
 			continue;
 		}
 		if (character === "\\") {
+			if (command[cursor + 1] !== "\n") atWordStart = false;
 			cursor += 1;
 			continue;
 		}
 		if (character === "$" && command[cursor + 1] === "'") {
 			quote = "'";
 			ansiQuote = true;
+			atWordStart = false;
 			cursor += 1;
 			continue;
 		}
 		if (character === "'" || character === '"') {
 			quote = character;
+			atWordStart = false;
 			continue;
 		}
-		if (character === "(") depth += 1;
-		if (character !== ")") continue;
-		depth -= 1;
-		if (depth === 0) return { body: command.slice(openingParenthesis + 1, cursor), end: cursor };
+		if (character === "#" && atWordStart) {
+			comment = true;
+			continue;
+		}
+		if (character === " " || character === "\t" || character === "\n") {
+			atWordStart = true;
+			continue;
+		}
+		if (character === "(") {
+			const previous = command[cursor - 1];
+			wordExpansionParentheses.push(previous !== undefined && "$<>?*+@!".includes(previous));
+			depth += 1;
+			atWordStart = true;
+			continue;
+		}
+		if (character === ")") {
+			depth -= 1;
+			if (depth === 0) return { body: command.slice(openingParenthesis + 1, cursor), end: cursor };
+			atWordStart = !(wordExpansionParentheses.pop() ?? false);
+			continue;
+		}
+		// Other shell metacharacters separate words; ordinary characters continue one.
+		atWordStart = character === ";" || character === "&" || character === "|" || character === "<" || character === ">";
 	}
 	return undefined;
 }
@@ -214,7 +246,7 @@ function readParameterExpansion(command: string, dollar: number): ParameterExpan
 	return undefined;
 }
 
-function analyzeCommand(command: string): CommandAnalysis {
+function analyzeCommand(command: string, nestedExecutable = false): CommandAnalysis {
 	const masked = maskHereDocumentBodies(command);
 	const source = masked.source;
 	const parts: string[] = [];
@@ -224,13 +256,16 @@ function analyzeCommand(command: string): CommandAnalysis {
 	let ansiQuote = false;
 	let commentStart: number | undefined;
 	let atWordStart = true;
+	const wordExpansionParentheses: boolean[] = [];
 	let canAutoAllow = !masked.hasHereDocument && masked.complete;
+	let failClosed = false;
 	let sawOperator = false;
 	let lastOperatorCanTerminate = false;
 
 	const addNested = (body: string) => {
-		const nested = analyzeCommand(body.trim());
+		const nested = analyzeCommand(body.trim(), true);
 		nestedParts.push(...nested.parts, ...nested.nestedParts);
+		if (nested.failClosed) failClosed = true;
 	};
 	const scanExpandableHereDocumentBody = (body: string) => {
 		for (let index = 0; index < body.length; index += 1) {
@@ -282,8 +317,9 @@ function analyzeCommand(command: string): CommandAnalysis {
 			expansion.content.includes("<(") ||
 			expansion.content.includes(">(")
 		) {
-			const nested = analyzeCommand(expansion.content);
+			const nested = analyzeCommand(expansion.content, true);
 			nestedParts.push(...nested.nestedParts);
+			if (nested.failClosed) failClosed = true;
 			canAutoAllow = false;
 		}
 		if (expansion.promptTransform) canAutoAllow = false;
@@ -348,6 +384,18 @@ function analyzeCommand(command: string): CommandAnalysis {
 			commentStart = index;
 			continue;
 		}
+		if (
+			nestedExecutable &&
+			character === "c" &&
+			atWordStart &&
+			source.slice(start, index).trim() === "" &&
+			source.startsWith("case", index) &&
+			(index + 4 === source.length || /\s/.test(source[index + 4]))
+		) {
+			// A case pattern's `)` is context-sensitive and can be mistaken for the end of
+			// an enclosing command substitution. Block instead of trusting partial analysis.
+			failClosed = true;
+		}
 		if (character === " " || character === "\t") {
 			atWordStart = true;
 			continue;
@@ -385,9 +433,16 @@ function analyzeCommand(command: string): CommandAnalysis {
 			atWordStart = false;
 			continue;
 		}
-		if (character === "(" || character === ")") {
+		if (character === "(") {
 			canAutoAllow = false;
-			atWordStart = false;
+			const previous = source[index - 1];
+			wordExpansionParentheses.push(previous !== undefined && "$<>?*+@!".includes(previous));
+			atWordStart = true;
+			continue;
+		}
+		if (character === ")") {
+			canAutoAllow = false;
+			atWordStart = !(wordExpansionParentheses.pop() ?? false);
 			continue;
 		}
 
@@ -420,15 +475,16 @@ function analyzeCommand(command: string): CommandAnalysis {
 	} else if (!lastOperatorCanTerminate) {
 		canAutoAllow = false;
 	}
-	if (parts.length === 0) return { parts: [command], nestedParts, canAutoAllow: false };
-	return { parts, nestedParts, canAutoAllow };
+	if (parts.length === 0) return { parts: [command], nestedParts, canAutoAllow: false, failClosed };
+	return { parts, nestedParts, canAutoAllow, failClosed };
 }
 
 export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDecision | undefined {
 	const normalized = command.trim();
-	const { parts, nestedParts, canAutoAllow } = analyzeCommand(normalized);
+	const { parts, nestedParts, canAutoAllow, failClosed } = analyzeCommand(normalized);
 	const policyCandidates = [normalized, ...parts, ...nestedParts];
 
+	if (failClosed) return "deny";
 	if (policyCandidates.some((part) => matchesPattern(policy.deny, part))) {
 		return "deny";
 	}

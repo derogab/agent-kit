@@ -265,6 +265,32 @@ test("heredoc parsing can never turn an extra command into a regex allow", async
 	);
 });
 
+test("comments beside subshell parentheses cannot introduce fake heredocs", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+	const commands = ["(# <<:\ngit push\n:\n)", "(printf x)# <<:\ngit push\n:\n"];
+
+	for (const command of commands) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
+	}
+});
+
+test("word-expansion suffixes are not mistaken for shell comments", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+	const commands = [
+		"printf $(printf x)# <<:\ngit push\n:\n",
+		"printf <(printf x)# <<:\ngit push\n:\n",
+		"printf @(x)# <<:\ngit push\n:\n",
+	];
+
+	for (const command of commands) {
+		assert.equal(decideByPolicy(denyPolicy, command), undefined, command);
+		assert.equal(decideByPolicy(askPolicy, command), undefined, command);
+	}
+});
+
 test("deny and ask rules inspect expansions using unquoted heredoc rules", () => {
 	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
 	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
@@ -302,6 +328,26 @@ test("deny and ask precedence includes nested executable expansions", () => {
 		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
 		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
 	}
+});
+
+test("command substitution comments cannot hide deny or ask matches", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+	const commands = [
+		"printf x $(# )\ngit push)",
+		"printf x $(printf $(printf x)#suffix; git push)",
+	];
+
+	for (const command of commands) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
+	}
+});
+
+test("ambiguous case patterns in command substitutions fail closed", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+	assert.equal(decideByPolicy(policy, "printf x $(case x in x) git push;; esac)"), "deny");
+	assert.equal(decideByPolicy(policy, "printf x $(printf case value)"), undefined);
 });
 
 test("parameter prompt detection is bounded to one balanced expansion", () => {

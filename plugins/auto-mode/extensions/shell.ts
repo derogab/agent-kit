@@ -150,6 +150,7 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 	let ansiQuote = false;
 	let comment = false;
 	let atWordStart = true;
+	const wordExpansionParentheses: boolean[] = [];
 	let expansionParentheses = 0;
 	// Each entry is the parenthesis depth to which its nested `$(` closes.
 	const commandSubstitutions: number[] = [];
@@ -319,7 +320,13 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 			continue;
 		}
 
-		if (character === "\n" || character === ";" || character === "&" || character === "|") {
+		if (character === "(") {
+			const previous = source[index - 1];
+			wordExpansionParentheses.push(previous !== undefined && "$<>?*+@!".includes(previous));
+			atWordStart = true;
+		} else if (character === ")") {
+			atWordStart = !(wordExpansionParentheses.pop() ?? false);
+		} else if (character === "\n" || character === ";" || character === "&" || character === "|") {
 			atWordStart = true;
 		} else if (character === " " || character === "\t" || character === "<" || character === ">") {
 			atWordStart = true;

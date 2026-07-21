@@ -176,6 +176,27 @@ test("targets that do not exist yet are judged by where creation would land", (t
 	assert.throws(() => buildClassifierContext("echo hi > dangling", cwd), /cannot be resolved safely/);
 });
 
+test("attached time output paths remain filesystem candidates through command wrappers", (t) => {
+	const { root, cwd } = createFixture(t);
+	const outsideFile = join(realpathSync(root), "time-output");
+
+	for (const option of [`--output=${outsideFile}`, `-o${outsideFile}`]) {
+		const context = buildClassifierContext(`env time ${option} printf done`, cwd);
+		const candidates = JSON.parse(context.messages[0].content[0].text).filesystemCandidates;
+		assert.deepEqual(
+			candidates.find((candidate: { value: string }) => candidate.value === option),
+			{
+				value: option,
+				role: "argument",
+				status: "resolved",
+				canonicalPath: outsideFile,
+				boundary: "outside",
+			},
+			option,
+		);
+	}
+});
+
 test("the option terminator preserves a later equals-containing operand", (t) => {
 	const { root, cwd } = createFixture(t);
 	const outsideFile = join(root, "outside-file");
@@ -429,6 +450,7 @@ test("directory-changing commands fail closed instead of resolving later operand
 		"if cd subdirectory; then cat linked-file; fi",
 		"time cd subdirectory && cat linked-file",
 		"time -p cd subdirectory && cat linked-file",
+		"A+=x cd subdirectory && cat linked-file",
 		"{ cd subdirectory; cat linked-file; }",
 		"function relocate { cd subdirectory; }; relocate; cat linked-file",
 		"function relocate() { cd subdirectory; }; relocate; cat linked-file",

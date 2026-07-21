@@ -331,7 +331,7 @@ test("the command is sealed only after AI or confirmation approval", { timeout: 
 	const aiResult = aiHarness.handler(aiEvent, createContext(cwd));
 	await aiStarted.promise;
 	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, true);
-	assert.deepEqual(aiHarness.entries, []);
+	assert.equal(aiHarness.entries.length, 0);
 	releaseAi.resolve();
 	assert.equal(await aiResult, undefined);
 	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, false);
@@ -359,7 +359,7 @@ test("the command is sealed only after AI or confirmation approval", { timeout: 
 	);
 	await confirmationStarted.promise;
 	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, true);
-	assert.deepEqual(askHarness.entries, []);
+	assert.equal(askHarness.entries.length, 0);
 	releaseConfirmation.resolve(true);
 	assert.equal(await askResult, undefined);
 	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, false);

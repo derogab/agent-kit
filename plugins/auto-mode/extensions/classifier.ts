@@ -27,7 +27,7 @@ interface ShellWord {
 	static: boolean;
 	role: "argument" | "assignment" | "executable" | "redirection" | "syntax";
 	commandIndex: number;
-	optionValue: boolean;
+	optionValueOffset?: number;
 }
 
 // Shell keywords and simple wrappers whose next non-option word is another executable.
@@ -51,11 +51,23 @@ const COMMAND_PREFIXES = new Set([
 const OPTION_COMMAND_PREFIXES = new Set(["command", "builtin", "exec", "time", "env"]);
 const CURRENT_SHELL_EXECUTION = new Set(["eval", "source", ".", "trap"]);
 const ASSIGNMENT_BUILTINS = new Set(["declare", "export", "local", "readonly", "typeset"]);
+const ASSIGNMENT_WORD = /^[a-zA-Z_][a-zA-Z0-9_]*\+?=/;
 const PREFIX_OPTIONS_WITH_OPERANDS: Readonly<Record<string, ReadonlySet<string>>> = {
 	exec: new Set(["-a"]),
 	time: new Set(["-f", "--format", "-o", "--output"]),
 	env: new Set(["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-P", "--path", "-a", "--argv0"]),
 };
+
+function attachedPrefixOptionValueOffset(executable: string, value: string): number | undefined {
+	for (const option of PREFIX_OPTIONS_WITH_OPERANDS[executable] ?? []) {
+		if (option.startsWith("--")) {
+			if (value.startsWith(`${option}=`)) return option.length + 1;
+		} else if (value.startsWith(option) && value.length > option.length) {
+			return option.length;
+		}
+	}
+	return undefined;
+}
 
 type FilesystemResolution =
 	| {
@@ -96,7 +108,7 @@ function readShellWords(command: string): ShellWord[] {
 	const finishWord = () => {
 		if (active) {
 			let role: ShellWord["role"];
-			let optionValue = false;
+			let optionValueOffset: number | undefined;
 			if (pendingRedirection === "descriptor") {
 				role = staticWord && /^(?:[0-9]+-?|-)$/.test(value) ? "syntax" : "redirection";
 				pendingRedirection = undefined;
@@ -112,16 +124,21 @@ function readShellWords(command: string): ShellWord[] {
 			} else if (expectExecutable && pendingPrefixOptionOperand) {
 				role = "argument";
 				pendingPrefixOptionOperand = false;
-			} else if (expectExecutable && /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(value)) {
+			} else if (expectExecutable && ASSIGNMENT_WORD.test(value)) {
 				role = "assignment";
 			} else if (expectExecutable && prefixAllowsOptions && staticWord && /^-(?:-|[^-])/.test(value)) {
-				role = "syntax";
-				if (value === "--") {
-					prefixAllowsOptions = false;
-				} else if (prefixExecutable && PREFIX_OPTIONS_WITH_OPERANDS[prefixExecutable]?.has(value)) {
-					pendingPrefixOptionOperand = true;
+				optionValueOffset = prefixExecutable
+					? attachedPrefixOptionValueOffset(prefixExecutable, value)
+					: undefined;
+				role = optionValueOffset === undefined ? "syntax" : "argument";
+				if (optionValueOffset === undefined) {
+					if (value === "--") {
+						prefixAllowsOptions = false;
+					} else if (prefixExecutable && PREFIX_OPTIONS_WITH_OPERANDS[prefixExecutable]?.has(value)) {
+						pendingPrefixOptionOperand = true;
+					}
 				}
-			} else if (!expectExecutable && assignmentArguments && /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(value)) {
+			} else if (!expectExecutable && assignmentArguments && ASSIGNMENT_WORD.test(value)) {
 				role = "assignment";
 			} else {
 				if (expectExecutable) {
@@ -135,7 +152,8 @@ function readShellWords(command: string): ShellWord[] {
 					optionsEnded = false;
 				} else {
 					role = "argument";
-					optionValue = !optionsEnded && value.startsWith("--") && value.includes("=");
+					const equals = !optionsEnded && value.startsWith("--") ? value.indexOf("=") : -1;
+					optionValueOffset = equals === -1 ? undefined : equals + 1;
 					if (staticWord && value === "--") optionsEnded = true;
 				}
 			}
@@ -144,7 +162,7 @@ function readShellWords(command: string): ShellWord[] {
 				static: staticWord || ((value === "{" || value === "}") && role === "executable"),
 				role,
 				commandIndex,
-				optionValue,
+				optionValueOffset,
 			});
 		}
 		value = "";
@@ -260,11 +278,9 @@ function isWithin(root: string, target: string): boolean {
 }
 
 function filesystemValue(word: ShellWord): string {
-	return (
-		word.role === "assignment" || word.optionValue
-			? word.value.slice(word.value.indexOf("=") + 1)
-			: word.value
-	);
+	if (word.role === "assignment") return word.value.slice(word.value.indexOf("=") + 1);
+	if (word.optionValueOffset !== undefined) return word.value.slice(word.optionValueOffset);
+	return word.value;
 }
 
 // Keep `..` components intact until the filesystem resolves any preceding symlinks.
@@ -424,7 +440,7 @@ function resolveCreatedTarget(
 function hasAttachedShortOptionPath(candidate: FilesystemCandidate, word: ShellWord): boolean {
 	return (
 		candidate.role === "argument" &&
-		!word.optionValue &&
+		word.optionValueOffset === undefined &&
 		/^-[^-]/.test(candidate.value) &&
 		isClearlyPathLike(word)
 	);
