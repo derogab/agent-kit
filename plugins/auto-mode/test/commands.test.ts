@@ -350,6 +350,7 @@ test("ambiguous case patterns in command substitutions fail closed", () => {
 		"printf x $(case x in x) git push;; esac)",
 		"printf x $(! case x in x) git push;; esac)",
 		"printf x $(coproc case x in x) git push;; esac)",
+		"printf x $({ case x in x) git push;; esac; })",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}

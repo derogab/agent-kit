@@ -390,7 +390,7 @@ function analyzeCommand(command: string, nestedExecutable = false): CommandAnaly
 			nestedExecutable &&
 			character === "c" &&
 			atWordStart &&
-			/^(?:(?:!|coproc)(?:[ \t]+|$))*$/.test(source.slice(start, index).trim()) &&
+			/^(?:(?:!|coproc|\{)(?:[ \t]+|$))*$/.test(source.slice(start, index).trim()) &&
 			source.startsWith("case", index) &&
 			(index + 4 === source.length || /\s/.test(source[index + 4]))
 		) {
