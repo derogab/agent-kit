@@ -577,6 +577,9 @@ function hasExecutableHereDocumentExpansion(body: string): boolean {
 	return normalized.includes("`") || /\$\((?!\()/.test(normalized) || /\$\{[^}]*@P\}/.test(normalized);
 }
 
+// Resolve filesystem facts on the host instead of asking the model to infer symlinks or
+// creation locations. Reject semantics we cannot represent so incomplete metadata cannot
+// make an unsafe target appear in-bound.
 export function buildClassifierContext(command: string, cwd: string) {
 	const canonicalCwd = realpathSync(cwd);
 	const canonicalTemporaryDirectory = realpathSync(tmpdir());

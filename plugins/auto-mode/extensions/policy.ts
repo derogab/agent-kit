@@ -246,6 +246,8 @@ function readParameterExpansion(command: string, dollar: number): ParameterExpan
 	return undefined;
 }
 
+// Extract commands conservatively for policy matching. Ambiguous executable syntax must not
+// earn a regex allow, and contexts that could hide an exact deny or ask match fail closed.
 function analyzeCommand(command: string, nestedExecutable = false): CommandAnalysis {
 	const masked = maskHereDocumentBodies(command);
 	const source = masked.source;

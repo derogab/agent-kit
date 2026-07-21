@@ -48,6 +48,8 @@ async function decideByAi(command: string, ctx: ExtensionContext): Promise<"allo
 		throw new Error("no model is selected");
 	}
 
+	// Classify in a fresh context so prior conversation cannot influence the safety decision
+	// and the untrusted command is seen only as data under the fixed classifier prompt.
 	const classifierContext = buildClassifierContext(command, ctx.cwd);
 	const options = {
 		signal: ctx.signal,
@@ -165,7 +167,8 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 		try {
-			// Pi does not revalidate after later handlers mutate this shared input object.
+			// Freeze the approved command because Pi does not revalidate this shared input after
+			// later handlers run.
 			lockBashCommand(event.input, command);
 		} catch (error) {
 			return {

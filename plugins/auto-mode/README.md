@@ -2,20 +2,16 @@
 
 A Pi plugin that automatically checks model-issued Bash commands before execution.
 
-## Decision order
+## How it works
 
 1. A matching deny pattern blocks the command.
 2. A matching ask pattern requests user confirmation.
 3. A command covered by allow patterns runs automatically.
-4. Anything the patterns cannot safely decide goes to a separate AI safety check.
+4. Anything else goes to a separate AI safety check.
 
-Policy matching checks the complete command, parsed shell-list elements, and recognized nested executable expansions. Deny rules always take precedence over ask and allow rules, and ask rules take precedence over allow rules. Regex allow is deliberately unavailable for shell syntax that cannot be split safely, including heredocs and executable expansions; those commands continue to the AI phase.
+Deny rules take precedence over ask and allow rules, and ask rules take precedence over allow rules. The AI check also returns `ALLOW`, `ASK`, or `DENY`. If auto-mode cannot check a command safely, it blocks it.
 
-The AI check uses Pi's active session model and provider, but creates a fresh request containing only a fixed classifier prompt, the command, the canonical working and operating-system temporary directories, and host-resolved filesystem candidate metadata. It does not include or modify the current conversation. Symlinks, prospective new targets, long-option values, and environment assignments are canonicalized before the request. For `file:` values, both the literal-path and local-URL interpretations are provided because programs differ. The model determines which arguments and interpretations are actual filesystem targets; path-shaped regexes and other literal strings are not rejected just for looking like paths.
-
-Some commands are blocked before a model request when their effects cannot be represented by trustworthy metadata. These include unresolved redirections, dynamic executable names, current-shell directory or code changes, malformed or executable-expanding heredocs, and recognized forms of inline interpreter code, alternate working-directory modes, and indirect command, response, or list sources. An exact `ALLOW` response runs the command, `ASK` requests user confirmation, and `DENY` blocks it. Errors, invalid responses, declined confirmations, and ask decisions without an available UI also block the command. Decisions display the command in a green `✓` block for allow or a red `✗` block for deny, followed by `AI` or `REGEX` to identify the source.
-
-Until that outcome is known, auto-mode only reads policy and filesystem metadata, makes the isolated classifier request when needed, and shows the confirmation prompt for `ASK`. It does not execute the command, rewrite its arguments, write files, or append a result entry during this phase. After an `ALLOW` or confirmed `ASK`, it seals the exact approved command in Pi's shared tool-call input so a later extension cannot replace the already checked value. Auto-mode does not alter that input on denied, failed, or declined calls.
+Auto-mode only checks the command while making this decision. It does not execute it, rewrite it, or change files. Pi can run the command only after an `ALLOW` or a confirmed `ASK`.
 
 ## Install
 
