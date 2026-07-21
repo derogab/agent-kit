@@ -15,6 +15,8 @@ The AI check uses Pi's active session model and provider, but creates a fresh re
 
 Some commands are blocked before a model request when their effects cannot be represented by trustworthy metadata. These include unresolved redirections, dynamic executable names, current-shell directory or code changes, malformed or executable-expanding heredocs, and recognized forms of inline interpreter code, alternate working-directory modes, and indirect command, response, or list sources. An exact `ALLOW` response runs the command, `ASK` requests user confirmation, and `DENY` blocks it. Errors, invalid responses, declined confirmations, and ask decisions without an available UI also block the command. Decisions display the command in a green `✓` block for allow or a red `✗` block for deny, followed by `AI` or `REGEX` to identify the source.
 
+Until that outcome is known, auto-mode only reads policy and filesystem metadata, makes the isolated classifier request when needed, and shows the confirmation prompt for `ASK`. It does not execute the command, rewrite its arguments, write files, or append a result entry during this phase. After an `ALLOW` or confirmed `ASK`, it seals the exact approved command in Pi's shared tool-call input so a later extension cannot replace the already checked value. Auto-mode does not alter that input on denied, failed, or declined calls.
+
 ## Install
 
 ```bash

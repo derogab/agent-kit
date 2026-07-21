@@ -179,12 +179,15 @@ test("ask decisions fail closed when confirmation is declined or unavailable", a
 		["no UI", createContext(cwd, { hasUI: false })],
 	] as const) {
 		const { handler, entries } = createHarness();
-		const result = await handler(bashEvent("deploy"), context);
+		const event = bashEvent("deploy");
+		const before = Object.getOwnPropertyDescriptor(event.input, "command");
+		const result = await handler(event, context);
 		assert.deepEqual(result, {
 			block: true,
 			reason: "Blocked because an auto-mode ask rule was not confirmed",
 		}, name);
 		assert.equal(entries[0].data.allowed, false, name);
+		assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before, name);
 	}
 });
 
@@ -311,7 +314,7 @@ test("older Pi contexts retain the authenticated compatibility completion path",
 	assert.match(authFailure.reason, /missing credentials/);
 });
 
-test("the command is pinned before asynchronous AI and confirmation checks", { timeout: 2_000 }, async () => {
+test("the command is sealed only after AI or confirmation approval", { timeout: 2_000 }, async () => {
 	const cwd = createCwd("mutation-lock");
 
 	const aiStarted = deferred<void>();
@@ -327,15 +330,14 @@ test("the command is pinned before asynchronous AI and confirmation checks", { t
 	const aiEvent = bashEvent("echo safe");
 	const aiResult = aiHarness.handler(aiEvent, createContext(cwd));
 	await aiStarted.promise;
-	let aiMutationError: unknown;
-	try {
-		aiEvent.input.command = "echo changed";
-	} catch (error) {
-		aiMutationError = error;
-	}
+	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, true);
+	assert.deepEqual(aiHarness.entries, []);
 	releaseAi.resolve();
-	await aiResult;
-	assert.ok(aiMutationError instanceof TypeError);
+	assert.equal(await aiResult, undefined);
+	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, false);
+	assert.throws(() => {
+		aiEvent.input.command = "echo changed";
+	}, TypeError);
 	assert.equal(aiEvent.input.command, "echo safe");
 	assert.equal(aiHarness.entries[0].data.command, "echo safe");
 
@@ -356,20 +358,59 @@ test("the command is pinned before asynchronous AI and confirmation checks", { t
 		}),
 	);
 	await confirmationStarted.promise;
-	let askMutationError: unknown;
-	try {
-		askEvent.input.command = "deploy changed";
-	} catch (error) {
-		askMutationError = error;
-	}
+	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, true);
+	assert.deepEqual(askHarness.entries, []);
 	releaseConfirmation.resolve(true);
-	await askResult;
-	assert.ok(askMutationError instanceof TypeError);
+	assert.equal(await askResult, undefined);
+	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, false);
+	assert.throws(() => {
+		askEvent.input.command = "deploy changed";
+	}, TypeError);
 	assert.equal(askEvent.input.command, "deploy safe");
 	assert.equal(askHarness.entries[0].data.command, "deploy safe");
 });
 
-test("a Bash input that cannot be pinned is blocked before policy or AI", async () => {
+test("a command changed while approval is pending is blocked without being overwritten", { timeout: 2_000 }, async () => {
+	const cwd = createCwd("mutation-during-check");
+	for (const response of ["ALLOW", "ASK"] as const) {
+		const aiStarted = deferred<void>();
+		const releaseAi = deferred<void>();
+		faux.setResponses([
+			async () => {
+				aiStarted.resolve();
+				await releaseAi.promise;
+				return fauxAssistantMessage(response);
+			},
+		]);
+		let confirmations = 0;
+		const { handler, entries } = createHarness();
+		const event = bashEvent("echo safe");
+		const resultPromise = handler(
+			event,
+			createContext(cwd, {
+				ui: {
+					confirm: async () => {
+						confirmations++;
+						return true;
+					},
+				},
+			}),
+		);
+		await aiStarted.promise;
+		event.input.command = "echo changed";
+		releaseAi.resolve();
+		const result = await resultPromise;
+
+		assert.match(result.reason, /command changed while approval was pending/, response);
+		assert.equal(event.input.command, "echo changed", response);
+		assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.writable, true, response);
+		assert.equal(confirmations, 0, response);
+		assert.deepEqual(entries, [], response);
+	}
+});
+
+test("a Bash input that cannot be sealed is blocked only after approval", async () => {
+	writeUserConfig({ allow: ["^npm test$"] });
 	const { handler, entries } = createHarness();
 	const event = bashEvent("npm test");
 	Object.defineProperty(event.input, "command", {
@@ -379,10 +420,11 @@ test("a Bash input that cannot be pinned is blocked before policy or AI", async 
 	});
 	const result = await handler(event, createContext(createCwd("unfreezable-input")));
 	assert.match(result.reason, /^Auto mode could not secure Bash command:/);
+	assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.get?.(), "npm test");
 	assert.deepEqual(entries, []);
 });
 
-test("pinning uses the exact command snapshot even when an earlier handler installed a getter", async () => {
+test("sealing uses the exact command snapshot from a stable getter", async () => {
 	writeUserConfig({ allow: ["^echo safe$"] });
 	const { handler, entries } = createHarness();
 	const event = bashEvent("echo safe");
@@ -390,12 +432,52 @@ test("pinning uses the exact command snapshot even when an earlier handler insta
 	Object.defineProperty(event.input, "command", {
 		configurable: true,
 		enumerable: true,
-		get: () => (reads++ === 0 ? "echo safe" : "echo changed"),
+		get: () => {
+			reads++;
+			return "echo safe";
+		},
 	});
 	const result = await handler(event, createContext(createCwd("getter-input")));
 	assert.equal(result, undefined);
+	assert.equal(reads, 2);
 	assert.equal(event.input.command, "echo safe");
 	assert.equal(entries[0].data.command, "echo safe");
+});
+
+test("an unreadable command fails the integrity check without changing its input", async () => {
+	writeUserConfig({ allow: ["^echo safe$"] });
+	const { handler, entries } = createHarness();
+	const event = bashEvent("echo safe");
+	let reads = 0;
+	Object.defineProperty(event.input, "command", {
+		configurable: true,
+		enumerable: false,
+		get: () => {
+			if (reads++ === 0) return "echo safe";
+			throw new Error("unreadable command");
+		},
+	});
+	const before = Object.getOwnPropertyDescriptor(event.input, "command");
+
+	const result = await handler(event, createContext(createCwd("unreadable-input")));
+
+	assert.match(result.reason, /command changed while approval was pending/);
+	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
+	assert.deepEqual(entries, []);
+});
+
+test("deny decisions leave the Bash input descriptor unchanged", async () => {
+	writeUserConfig({ deny: ["^npm test$"] });
+	const { handler } = createHarness();
+	const event = bashEvent("npm test");
+	const before = Object.getOwnPropertyDescriptor(event.input, "command");
+
+	const result = await handler(event, createContext(createCwd("denied-input")));
+
+	assert.match(result.reason, /Blocked by an auto-mode deny rule/);
+	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
+	event.input.command = "npm run lint";
+	assert.equal(event.input.command, "npm run lint");
 });
 
 test("result rendering sanitizes the command and shows source and outcome", () => {

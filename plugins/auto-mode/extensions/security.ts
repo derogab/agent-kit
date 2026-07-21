@@ -17,9 +17,10 @@ export function sanitizeTerminalText(text: string): string {
 }
 
 export function lockBashCommand(input: { command: string }, command = input.command): void {
+	const descriptor = Object.getOwnPropertyDescriptor(input, "command");
 	Object.defineProperty(input, "command", {
 		configurable: false,
-		enumerable: true,
+		enumerable: descriptor?.enumerable ?? true,
 		value: command,
 		writable: false,
 	});

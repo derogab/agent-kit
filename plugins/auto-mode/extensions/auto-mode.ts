@@ -14,6 +14,15 @@ import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.
 import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
+const COMMAND_CHANGED_REASON = "Auto mode blocked because the Bash command changed while approval was pending";
+
+function bashCommandIsUnchanged(input: { command: string }, command: string): boolean {
+	try {
+		return input.command === command;
+	} catch {
+		return false;
+	}
+}
 
 async function loadPolicyFile(path: string) {
 	try {
@@ -103,15 +112,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 		const command = event.input.command;
-		try {
-			// Pi awaits handlers, but another handler may retain and mutate this shared input object.
-			lockBashCommand(event.input, command);
-		} catch (error) {
-			return {
-				block: true,
-				reason: `Auto mode could not secure Bash command: ${error instanceof Error ? error.message : String(error)}`,
-			};
-		}
 
 		let policyDecision;
 		try {
@@ -137,18 +137,46 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		if (decision === "ask" && !bashCommandIsUnchanged(event.input, command)) {
+			return {
+				block: true,
+				reason: COMMAND_CHANGED_REASON,
+			};
+		}
+
 		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(command, ctx)));
-		pi.appendEntry("auto-mode-result", {
-			command,
-			allowed,
-			source,
-		});
 		if (!allowed) {
+			pi.appendEntry("auto-mode-result", {
+				command,
+				allowed,
+				source,
+			});
 			const decisionSource = source === "AI" ? "the auto-mode AI safety check" : `an auto-mode ${decision} rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
 			};
 		}
+
+		if (!bashCommandIsUnchanged(event.input, command)) {
+			return {
+				block: true,
+				reason: COMMAND_CHANGED_REASON,
+			};
+		}
+		try {
+			// Pi does not revalidate after later handlers mutate this shared input object.
+			lockBashCommand(event.input, command);
+		} catch (error) {
+			return {
+				block: true,
+				reason: `Auto mode could not secure Bash command: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+		pi.appendEntry("auto-mode-result", {
+			command,
+			allowed,
+			source,
+		});
 	});
 }
