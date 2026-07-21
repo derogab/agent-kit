@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { decideByPolicy, parsePolicyConfig, type PolicyConfig } from "../extensions/policy.ts";
 
@@ -228,5 +229,88 @@ test("expansions in redirections and input bodies cannot hide execution", () => 
 		"npm test <<EOF\n$(git push)\nEOF",
 		"npm test &>test.log;git push",
 		"npm test 2>&1 && git push",
+	]);
+});
+
+test("heredoc parsing can never turn an extra command into a regex allow", async () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
+	const exploit = [
+		"npm test <<npm\\ test",
+		"npm test '",
+		"npm test",
+		"# the shell still executes the command below",
+		"git push",
+		"' \\'",
+	].join("\n");
+
+	assertFallsThrough(policy, [
+		exploit,
+		"npm test <<EOF\nliteral input\nEOF",
+		"npm test <<'EOF'\n$(git push)\nEOF",
+		"npm test <<-EOF\n\tliteral input\n\tEOF",
+		"npm test <<EOF\nliteral input\nEOF\ngit push",
+	]);
+
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"], deny: ["^git push$"] }));
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<EOF\nliteral input\nEOF\ngit push"), "deny");
+	assert.equal(decideByPolicy(denyPolicy, "npm test 😀 <<EOF\n😀 literal input\nEOF\ngit push"), "deny");
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<EOF\n$(git push)\nEOF"), "deny");
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<EOF\n`git push`\nEOF"), "deny");
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<EOF\n$\\\n(git push)\nEOF"), "deny");
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<EOF\n\\$(git push)\nEOF"), undefined);
+	assert.equal(decideByPolicy(denyPolicy, "npm test <<'EOF'\ngit push\nEOF"), undefined);
+	assert.equal(
+		decideByPolicy(denyPolicy, "npm test <<$'\\x45OF'\nsafe\nEOF\ngit push\nx45OF"),
+		"deny",
+	);
+});
+
+test("deny and ask precedence includes nested executable expansions", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^printf"], deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"], ask: ["^git push$"] }));
+	const commands = [
+		"printf x $(git push)",
+		'printf x "$(git push)"',
+		"printf x `git push`",
+		'printf x "`git push`"',
+		"printf x <(git push)",
+		"printf x >(git push)",
+		"printf x ${ git push; }",
+		"printf x ${| git push; }",
+	];
+
+	for (const command of commands) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
+	}
+});
+
+test("parameter prompt detection is bounded to one balanced expansion", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"] }));
+	assert.equal(decideByPolicy(policy, "printf ${value} literal@P}"), "allow");
+	assert.equal(decideByPolicy(policy, "printf ${values[foo}bar]} literal@P}"), "allow");
+	assert.equal(decideByPolicy(policy, 'printf ${value:-"text"}'), "allow");
+	assert.equal(decideByPolicy(policy, "printf ${value:-$'\\}'}"), "allow");
+	assert.equal(decideByPolicy(policy, "printf ${value:-foo\\}bar}"), "allow");
+	assert.equal(decideByPolicy(policy, "printf ${outer:-${inner}}"), "allow");
+	assert.equal(decideByPolicy(policy, "printf ${value@P}"), undefined);
+	assert.equal(decideByPolicy(policy, "printf ${values[${index}]@P}"), undefined);
+	assert.equal(decideByPolicy(policy, "printf ${unterminated"), undefined);
+
+	const command = `printf ${"${value} ".repeat(10_000)}`;
+	const started = performance.now();
+	assert.equal(decideByPolicy(policy, command), "allow");
+	assert.ok(performance.now() - started < 500, "ordinary parameter expansions should be scanned in linear time");
+});
+
+test("escaped and unterminated executable expansions fail closed", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"] }));
+	const tick = "\x60";
+	assertFallsThrough(policy, [
+		"printf x $(printf \\))",
+		"printf x $(printf $'\\)')",
+		"printf x $(printf escaped\\)",
+		`printf x ${tick}printf \\${tick}${tick}`,
+		`printf x ${tick}unterminated`,
 	]);
 });

@@ -39,19 +39,33 @@ async function decideByAi(command: string, ctx: ExtensionContext): Promise<"allo
 		throw new Error("no model is selected");
 	}
 
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-	if (!auth.ok) {
-		throw new Error(auth.error);
-	}
-
-	const response = await completeSimple(ctx.model, buildClassifierContext(command, ctx.cwd), {
-		apiKey: auth.apiKey,
-		headers: auth.headers,
-		env: auth.env,
+	const classifierContext = buildClassifierContext(command, ctx.cwd);
+	const options = {
 		signal: ctx.signal,
-		reasoning: "medium",
-		cacheRetention: "none",
-	});
+		reasoning: "medium" as const,
+		cacheRetention: "none" as const,
+	};
+	// ExtensionContext currently exposes a compatibility ModelRegistry, while the backing runtime
+	// owns session-scoped provider overrides and custom streams. Feature-detect that runtime and
+	// retain the public compatibility path for older Pi releases.
+	const registry = ctx.modelRegistry as unknown as {
+		completeSimple?: typeof completeSimple;
+		runtime?: { completeSimple: typeof completeSimple };
+	};
+	const sessionRuntime = registry.completeSimple ? registry : registry.runtime;
+	let response;
+	if (sessionRuntime?.completeSimple) {
+		response = await sessionRuntime.completeSimple(ctx.model, classifierContext, options);
+	} else {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+		if (!auth.ok) throw new Error(auth.error);
+		response = await completeSimple(ctx.model, classifierContext, {
+			...options,
+			apiKey: auth.apiKey,
+			headers: auth.headers,
+			env: auth.env,
+		});
+	}
 
 	if (response.stopReason !== "stop") {
 		throw new Error(response.errorMessage ?? `classifier stopped: ${response.stopReason}`);
@@ -88,10 +102,20 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
+		const command = event.input.command;
+		try {
+			// Pi awaits handlers, but another handler may retain and mutate this shared input object.
+			lockBashCommand(event.input, command);
+		} catch (error) {
+			return {
+				block: true,
+				reason: `Auto mode could not secure Bash command: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
 
 		let policyDecision;
 		try {
-			policyDecision = decideByPolicy(await loadPolicy(ctx), event.input.command);
+			policyDecision = decideByPolicy(await loadPolicy(ctx), command);
 		} catch (error) {
 			return {
 				block: true,
@@ -104,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 		if (decision === undefined) {
 			source = "AI";
 			try {
-				decision = await decideByAi(event.input.command, ctx);
+				decision = await decideByAi(command, ctx);
 			} catch (error) {
 				return {
 					block: true,
@@ -113,9 +137,9 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(event.input.command, ctx)));
+		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(command, ctx)));
 		pi.appendEntry("auto-mode-result", {
-			command: event.input.command,
+			command,
 			allowed,
 			source,
 		});
@@ -126,8 +150,5 @@ export default function (pi: ExtensionAPI) {
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
 			};
 		}
-
-		// Later tool_call handlers receive this same input object, so pin the command that was checked.
-		lockBashCommand(event.input);
 	});
 }

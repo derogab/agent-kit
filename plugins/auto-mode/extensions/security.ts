@@ -16,11 +16,11 @@ export function sanitizeTerminalText(text: string): string {
 	});
 }
 
-export function lockBashCommand(input: { command: string }): void {
+export function lockBashCommand(input: { command: string }, command = input.command): void {
 	Object.defineProperty(input, "command", {
 		configurable: false,
 		enumerable: true,
-		value: input.command,
+		value: command,
 		writable: false,
 	});
 }
