@@ -388,12 +388,13 @@ function analyzeCommand(command: string, nestedExecutable = false): CommandAnaly
 			nestedExecutable &&
 			character === "c" &&
 			atWordStart &&
-			source.slice(start, index).trim() === "" &&
+			/^(?:(?:!|coproc)(?:[ \t]+|$))*$/.test(source.slice(start, index).trim()) &&
 			source.startsWith("case", index) &&
 			(index + 4 === source.length || /\s/.test(source[index + 4]))
 		) {
-			// A case pattern's `)` is context-sensitive and can be mistaken for the end of
-			// an enclosing command substitution. Block instead of trusting partial analysis.
+			// A case pattern's `)` is context-sensitive and can be mistaken for the end of an
+			// enclosing command substitution, including after shell prefixes. Block instead of
+			// trusting partial analysis.
 			failClosed = true;
 		}
 		if (character === " " || character === "\t") {

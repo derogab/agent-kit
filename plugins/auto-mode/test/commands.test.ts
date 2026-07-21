@@ -346,7 +346,13 @@ test("command substitution comments cannot hide deny or ask matches", () => {
 
 test("ambiguous case patterns in command substitutions fail closed", () => {
 	const policy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
-	assert.equal(decideByPolicy(policy, "printf x $(case x in x) git push;; esac)"), "deny");
+	for (const command of [
+		"printf x $(case x in x) git push;; esac)",
+		"printf x $(! case x in x) git push;; esac)",
+		"printf x $(coproc case x in x) git push;; esac)",
+	]) {
+		assert.equal(decideByPolicy(policy, command), "deny", command);
+	}
 	assert.equal(decideByPolicy(policy, "printf x $(printf case value)"), undefined);
 });
 
