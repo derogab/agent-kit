@@ -121,6 +121,22 @@ function maskRange(characters: string[], start: number, end: number) {
 	}
 }
 
+function startsHereDocument(source: string, index: number): boolean {
+	return (
+		source[index] === "<" &&
+		source[index - 1] !== "<" &&
+		source[index + 1] === "<" &&
+		source[index + 2] !== "<"
+	);
+}
+
+function startsShellComment(source: string, index: number): boolean {
+	return (
+		source[index] === "#" &&
+		(index === 0 || /\s/.test(source[index - 1]) || ";&|()<>".includes(source[index - 1]))
+	);
+}
+
 /**
  * Replace heredoc bodies and terminator lines with whitespace while preserving source offsets
  * and newlines. The shell scanners can then inspect commands after a heredoc without treating
@@ -134,9 +150,18 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 	let ansiQuote = false;
 	let comment = false;
 	let atWordStart = true;
-	let arithmeticParentheses = 0;
+	let expansionParentheses = 0;
+	// Each entry is the parenthesis depth to which its nested `$(` closes.
+	const commandSubstitutions: number[] = [];
+	const arithmeticExpansions: number[] = [];
+	const quotedExpansions: number[] = [];
 	let hasHereDocument = false;
 	const expandableHereDocumentBodies: string[] = [];
+	const insideCommandSubstitution = () => {
+		const commandDepth = commandSubstitutions.at(-1);
+		const arithmeticDepth = arithmeticExpansions.at(-1);
+		return commandDepth !== undefined && (arithmeticDepth === undefined || commandDepth > arithmeticDepth);
+	};
 
 	for (let index = 0; index < source.length; index += 1) {
 		const character = source[index];
@@ -147,7 +172,17 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 		}
 
 		if (quote) {
-			if (character === "\\" && (quote !== "'" || ansiQuote)) {
+			if (quote === '"' && source.startsWith("$(", index)) {
+				const arithmetic = source[index + 2] === "(";
+				const baseDepth = expansionParentheses;
+				if (arithmetic) arithmeticExpansions.push(baseDepth);
+				else commandSubstitutions.push(baseDepth);
+				quotedExpansions.push(baseDepth);
+				expansionParentheses += arithmetic ? 2 : 1;
+				quote = undefined;
+				atWordStart = false;
+				index += arithmetic ? 2 : 1;
+			} else if (character === "\\" && (quote !== "'" || ansiQuote)) {
 				index += 1;
 			} else if (character === quote) {
 				quote = undefined;
@@ -155,26 +190,63 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 			}
 			continue;
 		}
-		if (arithmeticParentheses > 0) {
+
+		if (expansionParentheses > 0 && !(character === "\n" && pending.length > 0)) {
 			if (character === "\\") {
+				index += 1;
+			} else if (character === "$" && source[index + 1] === "'") {
+				quote = "'";
+				ansiQuote = true;
 				index += 1;
 			} else if (character === "'" || character === '"') {
 				quote = character;
+			} else if (insideCommandSubstitution() && startsShellComment(source, index)) {
+				comment = true;
+			} else if (source.startsWith("$((", index)) {
+				arithmeticExpansions.push(expansionParentheses);
+				expansionParentheses += 2;
+				index += 2;
+			} else if (source.startsWith("$(", index) && source[index + 2] !== "(") {
+				commandSubstitutions.push(expansionParentheses);
+				expansionParentheses += 1;
+				index += 1;
+			} else if (insideCommandSubstitution() && startsHereDocument(source, index)) {
+				hasHereDocument = true;
+				const stripTabs = source[index + 2] === "-";
+				const parsed = readHereDocument(source, index + (stripTabs ? 3 : 2), stripTabs);
+				if (!parsed) {
+					return { source: masked.join(""), hasHereDocument, complete: false, expandableHereDocumentBodies };
+				}
+				pending.push(parsed.document);
+				index = parsed.end - 1;
+				atWordStart = false;
 			} else if (character === "(") {
-				arithmeticParentheses += 1;
+				expansionParentheses += 1;
 			} else if (character === ")") {
-				arithmeticParentheses -= 1;
+				expansionParentheses -= 1;
+				if (arithmeticExpansions.at(-1) === expansionParentheses) {
+					arithmeticExpansions.pop();
+				}
+				if (commandSubstitutions.at(-1) === expansionParentheses) {
+					commandSubstitutions.pop();
+				}
+				if (quotedExpansions.at(-1) === expansionParentheses) {
+					quotedExpansions.pop();
+					quote = '"';
+				}
 			}
 			continue;
 		}
 		if (source.startsWith("$((", index)) {
-			arithmeticParentheses = 2;
+			arithmeticExpansions.push(0);
+			expansionParentheses = 2;
 			atWordStart = false;
 			index += 2;
 			continue;
 		}
 		if (source.startsWith("((", index)) {
-			arithmeticParentheses = 2;
+			arithmeticExpansions.push(0);
+			expansionParentheses = 2;
 			atWordStart = false;
 			index += 1;
 			continue;
@@ -202,12 +274,7 @@ export function maskHereDocumentBodies(source: string): MaskedShellSource {
 			continue;
 		}
 
-		if (
-			character === "<" &&
-			source[index - 1] !== "<" &&
-			source[index + 1] === "<" &&
-			source[index + 2] !== "<"
-		) {
+		if (startsHereDocument(source, index)) {
 			hasHereDocument = true;
 			const stripTabs = source[index + 2] === "-";
 			const parsed = readHereDocument(source, index + (stripTabs ? 3 : 2), stripTabs);

@@ -265,6 +265,25 @@ test("heredoc parsing can never turn an extra command into a regex allow", async
 	);
 });
 
+test("deny and ask rules inspect expansions using unquoted heredoc rules", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+	const commands = [
+		"cat <<EOF\n# $(git push)\nEOF",
+		"cat <<EOF\nliteral # `git push`\nEOF",
+		"cat <<EOF\n'$(git push)'\nEOF",
+		'cat <<EOF\n"`git push`"\nEOF',
+		"cat <<EOF\n$'$(git push)'\nEOF",
+		"cat <<EOF\n# ${ git push; }\nEOF",
+		"cat <<EOF\n'${value:-$(git push)}'\nEOF",
+	];
+
+	for (const command of commands) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
+	}
+});
+
 test("deny and ask precedence includes nested executable expansions", () => {
 	const denyPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^printf"], deny: ["^git push$"] }));
 	const askPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^printf"], ask: ["^git push$"] }));

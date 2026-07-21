@@ -232,11 +232,40 @@ function analyzeCommand(command: string): CommandAnalysis {
 		const nested = analyzeCommand(body.trim());
 		nestedParts.push(...nested.parts, ...nested.nestedParts);
 	};
+	const scanExpandableHereDocumentBody = (body: string) => {
+		for (let index = 0; index < body.length; index += 1) {
+			const character = body[index];
+			if (character === "`") {
+				const expansion = readBacktick(body, index);
+				if (expansion) {
+					addNested(expansion.body);
+					index = expansion.end;
+				}
+				continue;
+			}
+			if (character !== "$") continue;
+
+			if (body[index + 1] === "(" && body[index + 2] !== "(") {
+				const expansion = readParenthesized(body, index + 1);
+				if (expansion) {
+					addNested(expansion.body);
+					index = expansion.end;
+				}
+				continue;
+			}
+			if (body[index + 1] !== "{") continue;
+
+			const expansion = readParameterExpansion(body, index);
+			if (!expansion) continue;
+			if (expansion.commandBody !== undefined) addNested(expansion.commandBody);
+			else scanExpandableHereDocumentBody(expansion.content);
+			index = expansion.end;
+		}
+	};
 	for (const body of masked.expandableHereDocumentBodies) {
-		// Plain heredoc text is input, not shell code. Only executable expansions nested in
-		// an unquoted body participate in deny/ask precedence.
-		const nested = analyzeCommand(normalizeExpandableHereDocumentBody(body));
-		nestedParts.push(...nested.nestedParts);
+		// Quotes and comments are ordinary text in an unquoted heredoc body. Normalize the
+		// backslashes that can suppress expansion, then inspect only executable expansions.
+		scanExpandableHereDocumentBody(normalizeExpandableHereDocumentBody(body));
 	}
 	const handleParameterExpansion = (index: number) => {
 		const expansion = readParameterExpansion(source, index);

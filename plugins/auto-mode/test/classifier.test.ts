@@ -342,6 +342,17 @@ test("heredoc bodies are not misrepresented as commands or filesystem operands",
 	}
 	assert.doesNotThrow(() => buildClassifierContext("cat <<<'/etc/passwd'", cwd));
 	assert.doesNotThrow(() => buildClassifierContext(`printf '%s' "$((1 << 2))"`, cwd));
+	assert.doesNotThrow(() =>
+		buildClassifierContext('printf "%s" "\\$((1 << 2))"', cwd),
+	);
+	assert.doesNotThrow(() =>
+		buildClassifierContext(
+			'printf "%s" "$(( $(printf 1) + $(printf "%s" 2) + (1 << 2) ))"',
+			cwd,
+		),
+	);
+	assert.doesNotThrow(() => buildClassifierContext('printf "%s" "$(printf %s $((1 << 2)))"', cwd));
+	assert.doesNotThrow(() => buildClassifierContext('printf "%s" "$(cat <<\'EOF\'\n$(literal)\nEOF\n)"', cwd));
 	assert.doesNotThrow(() => buildClassifierContext("((value = 1 << 2)); printf done", cwd));
 	assert.throws(
 		() => buildClassifierContext("cat <<$'\\x45OF'\nsafe\nEOF\ncat /etc/passwd\nx45OF", cwd),
@@ -363,6 +374,19 @@ test("heredoc bodies are not misrepresented as commands or filesystem operands",
 		() => buildClassifierContext("cat <<EOF\n$\\\n(cat /etc/passwd)\nEOF", cwd),
 		/executable expansion in an unquoted heredoc/,
 	);
+	for (const command of [
+		'printf "%s" "$(cat <<EOF\n$(cat /etc/passwd)\nEOF\n)"',
+		'printf "%s" "$(( $(printf 1) + $( (printf "%s" 2); cat <<EOF\n$(cat /etc/passwd)\nEOF\n) ))"',
+		'printf "%s" "$(( $(printf 1 # )\ncat <<EOF\n$(cat /etc/passwd)\nEOF\n) ))"',
+		`printf "%s" "$(( $(printf %s $'\\')'\ncat <<EOF\n$(cat /etc/passwd)\nEOF\n) ))"`,
+		'printf "%s" "$(( $(printf %s $"literal )"\ncat <<EOF\n$(cat /etc/passwd)\nEOF\n) ))"',
+	]) {
+		assert.throws(
+			() => buildClassifierContext(command, cwd),
+			/executable expansion in an unquoted heredoc/,
+			command,
+		);
+	}
 	assert.doesNotThrow(() => buildClassifierContext("cat <<EOF\n\\$(literal)\nEOF", cwd));
 	assert.doesNotThrow(() => buildClassifierContext("cat <<EOF\n\\q\nEOF", cwd));
 	assert.throws(() => buildClassifierContext("cat <<EOF\nunterminated", cwd), /heredoc cannot be resolved safely/);
