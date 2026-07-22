@@ -2,6 +2,8 @@
 
 A Pi plugin that automatically checks model-issued Bash commands before execution.
 
+> **WARNING**: this plugin is under active development and must be considered alpha software. Use it with caution.
+
 ## How it works
 
 1. A matching deny pattern blocks the command.
