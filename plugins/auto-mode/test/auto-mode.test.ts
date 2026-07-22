@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after, beforeEach } from "node:test";
-import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import test, { after, beforeEach, type TestContext } from "node:test";
+import { CLASSIFIER_ENDPOINT, CLASSIFIER_MODEL } from "../extensions/classifier.ts";
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), "pi-auto-mode-test-"));
 const agentDirectory = join(fixtureRoot, "agent");
@@ -16,38 +14,6 @@ mkdirSync(agentDirectory);
 
 const { default: autoMode } = await import("../extensions/auto-mode.ts");
 
-const faux = createFauxCore({
-	api: "auto-mode-test",
-	provider: "auto-mode-test",
-	models: [{ id: "classifier", name: "Classifier" }],
-});
-const runtime = await ModelRuntime.create({
-	authPath: join(agentDirectory, "auth.json"),
-	modelsPath: null,
-	allowModelNetwork: false,
-});
-const fauxModel = faux.getModel();
-runtime.registerProvider("auto-mode-test", {
-	api: faux.api,
-	apiKey: "test-key",
-	baseUrl: fauxModel.baseUrl,
-	streamSimple: faux.streamSimple,
-	models: [
-		{
-			id: fauxModel.id,
-			name: fauxModel.name,
-			reasoning: fauxModel.reasoning,
-			input: fauxModel.input,
-			cost: fauxModel.cost,
-			contextWindow: fauxModel.contextWindow,
-			maxTokens: fauxModel.maxTokens,
-		},
-	],
-});
-const model = runtime.getModel("auto-mode-test", "classifier");
-assert.ok(model);
-const modelRegistry = new ModelRegistry(runtime);
-
 after(() => {
 	if (previousAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
@@ -56,12 +22,18 @@ after(() => {
 
 beforeEach(() => {
 	rmSync(userConfigPath, { force: true });
-	faux.setResponses([]);
 });
+
+type DecisionSource = "MODEL" | "POLICY";
 
 interface RecordedEntry {
 	type: string;
-	data: { command: string; allowed: boolean; source: "AI" | "REGEX" };
+	data: { command: string; allowed: boolean; source: DecisionSource };
+}
+
+interface RecordedRequest {
+	input: string | URL | Request;
+	init?: RequestInit;
 }
 
 function createHarness() {
@@ -90,8 +62,6 @@ function createHarness() {
 function createContext(cwd: string, overrides: Record<string, unknown> = {}) {
 	return {
 		cwd,
-		model,
-		modelRegistry,
 		signal: undefined,
 		hasUI: true,
 		isProjectTrusted: () => false,
@@ -114,8 +84,29 @@ function writeUserConfig(config: unknown) {
 	writeFileSync(userConfigPath, typeof config === "string" ? config : JSON.stringify(config));
 }
 
-function queueDecision(decision: "ALLOW" | "ASK" | "DENY") {
-	faux.setResponses([fauxAssistantMessage(decision)]);
+function completion(risk: string): Response {
+	return new Response(
+		JSON.stringify({
+			choices: [{ message: { content: `<analysis>Classification.</analysis><risks>${risk}</risks>` } }],
+		}),
+		{ headers: { "content-type": "application/json" } },
+	);
+}
+
+function mockClassifier(t: TestContext, responses: Array<Response | Error | (() => Promise<Response>)>) {
+	const requests: RecordedRequest[] = [];
+	t.mock.method(
+		globalThis,
+		"fetch",
+		(async (input: string | URL | Request, init?: RequestInit) => {
+			requests.push({ input, init });
+			const response = responses.shift();
+			if (!response) throw new Error("unexpected classifier request");
+			if (response instanceof Error) throw response;
+			return typeof response === "function" ? response() : response;
+		}) as typeof fetch,
+	);
+	return requests;
 }
 
 function deferred<T>() {
@@ -136,13 +127,14 @@ test("only Bash tool calls are handled", async () => {
 	assert.deepEqual(entries, []);
 });
 
-test("regex decisions run before AI with deny, ask, allow precedence", async () => {
+test("policy decisions run before the model with deny, ask, allow precedence", async (t) => {
 	writeUserConfig({
 		allow: ["^echo (allow|ask|deny)$"],
 		ask: ["^echo (ask|deny)$"],
 		deny: ["^echo deny$"],
 	});
-	const cwd = createCwd("regex-decisions");
+	const requests = mockClassifier(t, []);
+	const cwd = createCwd("policy-decisions");
 	const confirmations: string[] = [];
 	const context = createContext(cwd, {
 		ui: {
@@ -152,7 +144,6 @@ test("regex decisions run before AI with deny, ask, allow precedence", async () 
 			},
 		},
 	});
-	const callsBefore = faux.state.callCount;
 
 	for (const [command, allowed] of [
 		["echo allow", true],
@@ -163,17 +154,17 @@ test("regex decisions run before AI with deny, ask, allow precedence", async () 
 		const result = await handler(bashEvent(command), context);
 		assert.equal(result?.block, allowed ? undefined : true, command);
 		assert.deepEqual(entries, [
-			{ type: "auto-mode-result", data: { command, allowed, source: "REGEX" } },
+			{ type: "auto-mode-result", data: { command, allowed, source: "POLICY" } },
 		]);
 	}
 
 	assert.deepEqual(confirmations, ["echo ask"]);
-	assert.equal(faux.state.callCount, callsBefore);
+	assert.equal(requests.length, 0);
 });
 
-test("ask decisions fail closed when confirmation is declined or unavailable", async () => {
+test("ask rules fail closed when confirmation is declined or unavailable", async () => {
 	writeUserConfig({ ask: ["^deploy$"] });
-	const cwd = createCwd("regex-ask-failures");
+	const cwd = createCwd("policy-ask-failures");
 	for (const [name, context] of [
 		["declined", createContext(cwd, { ui: { confirm: async () => false } })],
 		["no UI", createContext(cwd, { hasUI: false })],
@@ -224,131 +215,80 @@ test("user and trusted project policy files are loaded on every call", async () 
 	assert.match(invalidProject.reason, /^Auto mode configuration error:/);
 });
 
-test("AI decisions use the session provider and an isolated classifier request", async () => {
-	const cwd = createCwd("ai-request");
+test("unmatched commands use the dedicated classifier server", async (t) => {
 	const abortController = new AbortController();
-	let request: { context: any; options: any } | undefined;
-	faux.setResponses([
-		(context, options) => {
-			request = { context, options };
-			return fauxAssistantMessage("ALLOW");
-		},
-	]);
+	const requests = mockClassifier(t, [completion("No_Risk")]);
 	const { handler, entries } = createHarness();
 	const result = await handler(
 		bashEvent("npm test"),
-		createContext(cwd, { signal: abortController.signal }),
+		createContext(createCwd("model-request"), { signal: abortController.signal }),
 	);
 
 	assert.equal(result, undefined);
 	assert.deepEqual(entries, [
-		{ type: "auto-mode-result", data: { command: "npm test", allowed: true, source: "AI" } },
+		{ type: "auto-mode-result", data: { command: "npm test", allowed: true, source: "MODEL" } },
 	]);
-	assert.ok(request);
-	assert.match(request.context.systemPrompt, /Return exactly ALLOW, ASK, or DENY/);
-	assert.equal(request.context.messages.length, 1);
-	const input = JSON.parse(request.context.messages[0].content[0].text);
-	assert.equal(input.command, "npm test");
-	assert.equal(input.cwd, realpathSync(cwd));
-	assert.equal(request.options.reasoning, "medium");
-	assert.equal(request.options.cacheRetention, "none");
-	assert.equal(request.options.signal, abortController.signal);
+	assert.equal(requests[0].input, CLASSIFIER_ENDPOINT);
+	assert.equal(requests[0].init?.signal, abortController.signal);
+	const body = JSON.parse(String(requests[0].init?.body));
+	assert.equal(body.model, CLASSIFIER_MODEL);
+	assert.deepEqual(body.messages, [
+		{ role: "user", content: "<untrusted_output>\nnpm test\n</untrusted_output>" },
+	]);
 });
 
-test("every AI decision and failure mode fails or confirms explicitly", async () => {
-	const cwd = createCwd("ai-outcomes");
-	for (const [response, confirmed, allowed] of [
-		["ALLOW", false, true],
-		["ASK", true, true],
-		["ASK", false, false],
-		["DENY", false, false],
-	] as const) {
-		queueDecision(response);
+test("model risks and every classifier failure mode block", async (t) => {
+	const malformed = new Response(JSON.stringify({ choices: [{ message: { content: "No_Risk" } }] }));
+	const unavailable = new Response("unavailable", { status: 503 });
+	mockClassifier(t, [completion("Hazardous_Action_Generation"), malformed, unavailable, new Error("offline")]);
+	const cwd = createCwd("model-failures");
+
+	const riskyHarness = createHarness();
+	const risky = await riskyHarness.handler(bashEvent("rm -rf /"), createContext(cwd));
+	assert.match(risky.reason, /Blocked by the model classifier/);
+	assert.deepEqual(riskyHarness.entries, [
+		{ type: "auto-mode-result", data: { command: "rm -rf /", allowed: false, source: "MODEL" } },
+	]);
+
+	for (const expected of [/well-formed <risks>/, /HTTP 503/, /offline/]) {
 		const { handler, entries } = createHarness();
-		const result = await handler(
-			bashEvent("npm test"),
-			createContext(cwd, { ui: { confirm: async () => confirmed } }),
-		);
-		assert.equal(result?.block, allowed ? undefined : true, `${response}/${confirmed}`);
-		assert.equal(entries[0].data.allowed, allowed, `${response}/${confirmed}`);
-		assert.equal(entries[0].data.source, "AI");
+		const result = await handler(bashEvent("npm test"), createContext(cwd));
+		assert.match(result.reason, expected);
+		assert.match(result.reason, /^Auto mode classifier failed:/);
+		assert.deepEqual(entries, []);
 	}
-
-	faux.setResponses([fauxAssistantMessage("ALLOW.")]);
-	const invalid = await createHarness().handler(bashEvent("npm test"), createContext(cwd));
-	assert.match(invalid.reason, /classifier did not return ALLOW, ASK, or DENY/);
-
-	faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider failed" })]);
-	const providerError = await createHarness().handler(bashEvent("npm test"), createContext(cwd));
-	assert.match(providerError.reason, /provider failed/);
-
-	const noModel = await createHarness().handler(bashEvent("npm test"), createContext(cwd, { model: undefined }));
-	assert.match(noModel.reason, /no model is selected/);
-
-	queueDecision("ASK");
-	const noUi = await createHarness().handler(bashEvent("npm test"), createContext(cwd, { hasUI: false }));
-	assert.match(noUi.reason, /was not confirmed/);
 });
 
-test("older Pi contexts retain the authenticated compatibility completion path", async (t) => {
-	const legacy = registerFauxProvider({ api: "auto-mode-legacy-test", provider: "auto-mode-legacy-test" });
-	t.after(() => legacy.unregister());
-	legacy.setResponses([fauxAssistantMessage("ALLOW")]);
-	const legacyRegistry = {
-		getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "legacy-key", headers: { "x-test": "yes" } }),
-	};
-	const context = createContext(createCwd("legacy-provider"), {
-		model: legacy.getModel(),
-		modelRegistry: legacyRegistry,
-	});
-	const allowed = await createHarness().handler(bashEvent("npm test"), context);
-	assert.equal(allowed, undefined);
+test("the command is sealed only after model or confirmation approval", { timeout: 2_000 }, async (t) => {
+	const modelStarted = deferred<void>();
+	const releaseModel = deferred<void>();
+	mockClassifier(t, [async () => {
+		modelStarted.resolve();
+		await releaseModel.promise;
+		return completion("No_Risk");
+	}]);
 
-	const authFailure = await createHarness().handler(
-		bashEvent("npm test"),
-		createContext(createCwd("legacy-auth-failure"), {
-			model: legacy.getModel(),
-			modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: false, error: "missing credentials" }) },
-		}),
-	);
-	assert.match(authFailure.reason, /missing credentials/);
-});
-
-test("the command is sealed only after AI or confirmation approval", { timeout: 2_000 }, async () => {
-	const cwd = createCwd("mutation-lock");
-
-	const aiStarted = deferred<void>();
-	const releaseAi = deferred<void>();
-	faux.setResponses([
-		async () => {
-			aiStarted.resolve();
-			await releaseAi.promise;
-			return fauxAssistantMessage("ALLOW");
-		},
-	]);
-	const aiHarness = createHarness();
-	const aiEvent = bashEvent("echo safe");
-	const aiResult = aiHarness.handler(aiEvent, createContext(cwd));
-	await aiStarted.promise;
-	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, true);
-	assert.equal(aiHarness.entries.length, 0);
-	releaseAi.resolve();
-	assert.equal(await aiResult, undefined);
-	assert.equal(Object.getOwnPropertyDescriptor(aiEvent.input, "command")?.writable, false);
+	const modelHarness = createHarness();
+	const modelEvent = bashEvent("echo safe");
+	const modelResult = modelHarness.handler(modelEvent, createContext(createCwd("mutation-lock")));
+	await modelStarted.promise;
+	assert.equal(Object.getOwnPropertyDescriptor(modelEvent.input, "command")?.writable, true);
+	assert.equal(modelHarness.entries.length, 0);
+	releaseModel.resolve();
+	assert.equal(await modelResult, undefined);
+	assert.equal(Object.getOwnPropertyDescriptor(modelEvent.input, "command")?.writable, false);
 	assert.throws(() => {
-		aiEvent.input.command = "echo changed";
+		modelEvent.input.command = "echo changed";
 	}, TypeError);
-	assert.equal(aiEvent.input.command, "echo safe");
-	assert.equal(aiHarness.entries[0].data.command, "echo safe");
 
+	writeUserConfig({ ask: ["^deploy safe$"] });
 	const confirmationStarted = deferred<void>();
 	const releaseConfirmation = deferred<boolean>();
-	queueDecision("ASK");
 	const askHarness = createHarness();
 	const askEvent = bashEvent("deploy safe");
 	const askResult = askHarness.handler(
 		askEvent,
-		createContext(cwd, {
+		createContext(createCwd("confirmation-lock"), {
 			ui: {
 				confirm: async () => {
 					confirmationStarted.resolve();
@@ -359,54 +299,32 @@ test("the command is sealed only after AI or confirmation approval", { timeout: 
 	);
 	await confirmationStarted.promise;
 	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, true);
-	assert.equal(askHarness.entries.length, 0);
 	releaseConfirmation.resolve(true);
 	assert.equal(await askResult, undefined);
 	assert.equal(Object.getOwnPropertyDescriptor(askEvent.input, "command")?.writable, false);
-	assert.throws(() => {
-		askEvent.input.command = "deploy changed";
-	}, TypeError);
-	assert.equal(askEvent.input.command, "deploy safe");
-	assert.equal(askHarness.entries[0].data.command, "deploy safe");
 });
 
-test("a command changed while approval is pending is blocked without being overwritten", { timeout: 2_000 }, async () => {
-	const cwd = createCwd("mutation-during-check");
-	for (const response of ["ALLOW", "ASK"] as const) {
-		const aiStarted = deferred<void>();
-		const releaseAi = deferred<void>();
-		faux.setResponses([
-			async () => {
-				aiStarted.resolve();
-				await releaseAi.promise;
-				return fauxAssistantMessage(response);
-			},
-		]);
-		let confirmations = 0;
-		const { handler, entries } = createHarness();
-		const event = bashEvent("echo safe");
-		const resultPromise = handler(
-			event,
-			createContext(cwd, {
-				ui: {
-					confirm: async () => {
-						confirmations++;
-						return true;
-					},
-				},
-			}),
-		);
-		await aiStarted.promise;
-		event.input.command = "echo changed";
-		releaseAi.resolve();
-		const result = await resultPromise;
+test("a command changed while model approval is pending is blocked", { timeout: 2_000 }, async (t) => {
+	const modelStarted = deferred<void>();
+	const releaseModel = deferred<void>();
+	mockClassifier(t, [async () => {
+		modelStarted.resolve();
+		await releaseModel.promise;
+		return completion("No_Risk");
+	}]);
 
-		assert.match(result.reason, /command changed while approval was pending/, response);
-		assert.equal(event.input.command, "echo changed", response);
-		assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.writable, true, response);
-		assert.equal(confirmations, 0, response);
-		assert.deepEqual(entries, [], response);
-	}
+	const { handler, entries } = createHarness();
+	const event = bashEvent("echo safe");
+	const resultPromise = handler(event, createContext(createCwd("mutation-during-check")));
+	await modelStarted.promise;
+	event.input.command = "echo changed";
+	releaseModel.resolve();
+	const result = await resultPromise;
+
+	assert.match(result.reason, /command changed while approval was pending/);
+	assert.equal(event.input.command, "echo changed");
+	assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.writable, true);
+	assert.deepEqual(entries, []);
 });
 
 test("a Bash input that cannot be sealed is blocked only after approval", async () => {
@@ -458,9 +376,7 @@ test("an unreadable command fails the integrity check without changing its input
 		},
 	});
 	const before = Object.getOwnPropertyDescriptor(event.input, "command");
-
 	const result = await handler(event, createContext(createCwd("unreadable-input")));
-
 	assert.match(result.reason, /command changed while approval was pending/);
 	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
 	assert.deepEqual(entries, []);
@@ -471,9 +387,7 @@ test("deny decisions leave the Bash input descriptor unchanged", async () => {
 	const { handler } = createHarness();
 	const event = bashEvent("npm test");
 	const before = Object.getOwnPropertyDescriptor(event.input, "command");
-
 	const result = await handler(event, createContext(createCwd("denied-input")));
-
 	assert.match(result.reason, /Blocked by an auto-mode deny rule/);
 	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
 	event.input.command = "npm run lint";
@@ -484,7 +398,7 @@ test("result rendering sanitizes the command and shows source and outcome", () =
 	const { renderer } = createHarness();
 	const backgrounds: string[] = [];
 	const component = renderer(
-		{ data: { command: "printf \u001b[31mred", allowed: false, source: "AI" } },
+		{ data: { command: "printf \u001b[31mred", allowed: false, source: "MODEL" } },
 		{},
 		{
 			bg(name: string, text: string) {
@@ -494,6 +408,6 @@ test("result rendering sanitizes the command and shows source and outcome", () =
 		},
 	);
 	const rendered = component.render(80).join("\n");
-	assert.match(rendered, /printf \\u001b\[31mred ✗ AI/);
+	assert.match(rendered, /printf \\u001b\[31mred ✗ MODEL/);
 	assert.ok(backgrounds.every((name) => name === "toolErrorBg"));
 });

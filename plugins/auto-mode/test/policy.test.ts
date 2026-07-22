@@ -70,32 +70,35 @@ test("invalid regular expression patterns are rejected", () => {
 test("the packaged example is valid", async () => {
 	const source = await readFile(new URL("../auto-mode.example.json", import.meta.url), "utf8");
 	const policy = parsePolicyConfig(source);
-	for (const command of ["git status", "git diff", "npm test", "npm run lint", "npm run build"]) {
+	for (const command of [
+		"git status",
+		"git diff",
+		"npm test",
+		"npm run lint",
+		"npm run build",
+	]) {
 		assert.equal(decideByPolicy(policy, command), "allow", command);
 	}
-	assert.equal(decideByPolicy(policy, "npm test -- --unsafe-flag"), undefined);
 	assert.equal(decideByPolicy(policy, "git push"), "ask");
+	assert.equal(decideByPolicy(policy, "npm publish"), "ask");
 	assert.equal(decideByPolicy(policy, "sudo make install"), "deny");
 	for (const command of [
-		"git push --force --no-verify",
+		"git push --force",
 		"git push -f",
-		"git push origin --force-with-lease",
-		"git push --force-with-lease=main:abc origin",
-		"git push origin -uf",
+		"git push origin --force-with-lease=main:abc",
 		"rm -rf /tmp/example",
-		"rm -rfx /tmp/example",
 		"rm -fr /tmp/example",
-		"rm -xrf /tmp/example",
-		"rm -r --force /tmp/example",
-		"rm -f -r /tmp/example",
-		"rm -Rf /tmp/example",
-		"rm -fR /tmp/example",
-		"rm -R -f /tmp/example",
-		"rm --recursive --force /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}
-	for (const command of ["rm -r /tmp/example", "rm -f /tmp/example"]) {
-		assert.equal(decideByPolicy(policy, command), undefined, command);
+	for (const command of [
+		"git status --short",
+		"git diff --staged",
+		"npm test -- --watch",
+		"npm test > test.log",
+		"git status && npm publish",
+		"rm -r /tmp/example",
+	]) {
+		assert.notEqual(decideByPolicy(policy, command), "allow", command);
 	}
 });

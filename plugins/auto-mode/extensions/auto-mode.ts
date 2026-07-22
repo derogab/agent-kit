@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
 	CONFIG_DIR_NAME,
 	getAgentDir,
@@ -9,7 +8,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { buildClassifierContext, parseClassifierDecision } from "./classifier.ts";
+import { classifyCommand } from "./classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 
@@ -43,66 +42,18 @@ async function loadPolicy(ctx: ExtensionContext) {
 	return mergePolicyConfigs(...(await Promise.all(paths.map(loadPolicyFile))));
 }
 
-async function decideByAi(command: string, ctx: ExtensionContext): Promise<"allow" | "ask" | "deny"> {
-	if (!ctx.model) {
-		throw new Error("no model is selected");
-	}
-
-	// Classify in a fresh context so prior conversation cannot influence the safety decision
-	// and the untrusted command is seen only as data under the fixed classifier prompt.
-	const classifierContext = buildClassifierContext(command, ctx.cwd);
-	const options = {
-		signal: ctx.signal,
-		reasoning: "medium" as const,
-		cacheRetention: "none" as const,
-	};
-	// ExtensionContext currently exposes a compatibility ModelRegistry, while the backing runtime
-	// owns session-scoped provider overrides and custom streams. Feature-detect that runtime and
-	// retain the public compatibility path for older Pi releases.
-	const registry = ctx.modelRegistry as unknown as {
-		completeSimple?: typeof completeSimple;
-		runtime?: { completeSimple: typeof completeSimple };
-	};
-	const sessionRuntime = registry.completeSimple ? registry : registry.runtime;
-	let response;
-	if (sessionRuntime?.completeSimple) {
-		response = await sessionRuntime.completeSimple(ctx.model, classifierContext, options);
-	} else {
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-		if (!auth.ok) throw new Error(auth.error);
-		response = await completeSimple(ctx.model, classifierContext, {
-			...options,
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			env: auth.env,
-		});
-	}
-
-	if (response.stopReason !== "stop") {
-		throw new Error(response.errorMessage ?? `classifier stopped: ${response.stopReason}`);
-	}
-
-	const text = response.content
-		.filter((part): part is { type: "text"; text: string } => part.type === "text")
-		.map((part) => part.text)
-		.join("");
-	const decision = parseClassifierDecision(text);
-	if (!decision) {
-		throw new Error("classifier did not return ALLOW, ASK, or DENY");
-	}
-	return decision;
-}
-
 async function confirmCommand(command: string, ctx: ExtensionContext): Promise<boolean> {
 	if (!ctx.hasUI) return false;
 	return ctx.ui.confirm("Allow Bash command?", sanitizeTerminalText(command));
 }
 
+type DecisionSource = "MODEL" | "POLICY";
+
 export default function (pi: ExtensionAPI) {
-	pi.registerEntryRenderer<{ command: string; allowed: boolean; source: "AI" | "REGEX" }>(
+	pi.registerEntryRenderer<{ command: string; allowed: boolean; source: DecisionSource }>(
 		"auto-mode-result",
 		(entry, _options, theme) => {
-			const result = entry.data ?? { command: "", allowed: false, source: "AI" };
+			const result = entry.data ?? { command: "", allowed: false, source: "MODEL" };
 			const box = new Box(1, 0, (text) => theme.bg(result.allowed ? "toolSuccessBg" : "toolErrorBg", text));
 			box.addChild(
 				new Text(`${sanitizeTerminalText(result.command)} ${result.allowed ? "✓" : "✗"} ${result.source}`, 0, 0),
@@ -126,15 +77,15 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		let decision = policyDecision;
-		let source: "AI" | "REGEX" = "REGEX";
+		let source: DecisionSource = "POLICY";
 		if (decision === undefined) {
-			source = "AI";
+			source = "MODEL";
 			try {
-				decision = await decideByAi(command, ctx);
+				decision = await classifyCommand(command, ctx.signal);
 			} catch (error) {
 				return {
 					block: true,
-					reason: `Auto mode AI check failed: ${error instanceof Error ? error.message : String(error)}`,
+					reason: `Auto mode classifier failed: ${error instanceof Error ? error.message : String(error)}`,
 				};
 			}
 		}
@@ -153,7 +104,8 @@ export default function (pi: ExtensionAPI) {
 				allowed,
 				source,
 			});
-			const decisionSource = source === "AI" ? "the auto-mode AI safety check" : `an auto-mode ${decision} rule`;
+			const decisionSource =
+				source === "MODEL" ? "the model classifier" : `an auto-mode ${decision} rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,

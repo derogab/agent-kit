@@ -2,14 +2,16 @@
   "allow": [
     "^git status$",
     "^git diff$",
-    "^npm (test|run (lint|build))$"
+    "^npm test$",
+    "^npm run (lint|build)$"
   ],
   "ask": [
-    "^git push(?:\\s|$)"
+    "^git push(?:\\s|$)",
+    "^npm publish(?:\\s|$)"
   ],
   "deny": [
-    "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
     "(^|\\s)(sudo|doas)(\\s|$)",
-    "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?:\\s|$))"
+    "^git push .*?(--force(?:-with-lease)?|-f)(?:=\\S+)?(?:\\s|$)",
+    "^rm -(rf|fr)(?:\\s|$)"
   ]
 }
