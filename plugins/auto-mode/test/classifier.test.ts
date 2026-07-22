@@ -527,6 +527,22 @@ test("recognized inline interpreters fail closed instead of fabricating path met
 	assert.doesNotThrow(() => buildClassifierContext("grep -e/foo/ input.txt", cwd));
 });
 
+test("named coprocess compound commands fail closed before their bodies are classified", (t) => {
+	const { cwd } = createFixture(t);
+	for (const command of [
+		"coproc worker { cd subdirectory; }",
+		"coproc worker { bash -c 'cat /etc/passwd'; }",
+		'coproc worker { "$command_name" argument; }',
+		"coproc worker if true; then printf done; fi",
+		"coproc worker while true; do printf done; done",
+		"coproc worker (printf done)",
+	]) {
+		assert.throws(() => buildClassifierContext(command, cwd), /named coprocesses cannot be classified safely/, command);
+	}
+	assert.doesNotThrow(() => buildClassifierContext("coproc worker 'if'", cwd));
+	assert.doesNotThrow(() => buildClassifierContext("coproc worker \\{", cwd));
+});
+
 test("recognized alternate cwd and indirect argument semantics fail closed", (t) => {
 	const { cwd } = createFixture(t);
 	mkdirSync(join(cwd, "subdirectory"));

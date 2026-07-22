@@ -249,23 +249,34 @@ function readParameterExpansion(command: string, dollar: number): ParameterExpan
 const WRAPPED_COMMAND_PREFIX =
 	/^(?:\(\s*|\{(?:[ \t]+|$)|(?:!|coproc|command|builtin|exec|time|env|if|then|else|elif|while|until|do)(?:[ \t]+|$))/;
 
+// Env assignments and options require command-specific parsing. Reject any uncertain prefix
+// instead of deriving an inner candidate that could omit the command covered by deny/ask rules.
+const UNCERTAIN_ENV_PREFIX = /^(?:-|['"\\$`]|[^ \t;&|()<>\n]*=)/;
+
+interface UnwrappedPolicyCommand {
+	command?: string;
+	uncertain: boolean;
+}
+
 // Add the inner simple command only to deny/ask candidates. Allow still uses the original
 // shell parts, so removing wrappers can never broaden automatic execution.
-function unwrapPolicyCommand(part: string): string | undefined {
+function unwrapPolicyCommand(part: string): UnwrappedPolicyCommand {
 	let command = part.trim();
 	let unwrapped = false;
 	const closingDelimiters: string[] = [];
 	for (let match = WRAPPED_COMMAND_PREFIX.exec(command); match; match = WRAPPED_COMMAND_PREFIX.exec(command)) {
 		if (match[0].startsWith("(")) closingDelimiters.push(")");
 		else if (match[0].startsWith("{")) closingDelimiters.push("}");
+		const wrapper = match[0].trim();
 		command = command.slice(match[0].length).trimStart();
 		unwrapped = true;
+		if (wrapper === "env" && UNCERTAIN_ENV_PREFIX.test(command)) return { uncertain: true };
 	}
-	if (!unwrapped) return undefined;
+	if (!unwrapped) return { uncertain: false };
 	for (const delimiter of closingDelimiters) {
 		if (command.endsWith(delimiter)) command = command.slice(0, -1).trimEnd();
 	}
-	return command || undefined;
+	return { command: command || undefined, uncertain: false };
 }
 
 // Extract commands conservatively for policy matching. Ambiguous executable syntax must not
@@ -510,12 +521,13 @@ export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDec
 	const normalized = command.trim();
 	const { parts, nestedParts, canAutoAllow, failClosed } = analyzeCommand(normalized);
 	const parsedCandidates = [...parts, ...nestedParts];
-	const wrappedCandidates = parsedCandidates
-		.map(unwrapPolicyCommand)
+	const unwrapped = parsedCandidates.map(unwrapPolicyCommand);
+	const wrappedCandidates = unwrapped
+		.map((result) => result.command)
 		.filter((candidate): candidate is string => candidate !== undefined);
 	const policyCandidates = [normalized, ...parsedCandidates, ...wrappedCandidates];
 
-	if (failClosed) return "deny";
+	if (failClosed || unwrapped.some((result) => result.uncertain)) return "deny";
 	if (policyCandidates.some((part) => matchesPattern(policy.deny, part))) {
 		return "deny";
 	}

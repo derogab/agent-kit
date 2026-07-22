@@ -69,6 +69,33 @@ test("deny and ask rules apply to wrapped simple commands", () => {
 	assert.equal(decideByPolicy(denyPolicy, "command git push}"), undefined);
 });
 
+test("env assignments and options cannot bypass deny or ask policies", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push --force$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push --force$"] }));
+	const allowPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^git push --force$"] }));
+
+	for (const command of [
+		"env FOO=bar git push --force",
+		"env 'FOO=bar' git push --force",
+		"env FOO='bar baz' git push --force",
+		'env FOO="bar\\ baz" git push --force',
+		"env FOO=bar\\ baz git push --force",
+		"env -i FOO=bar git push --force",
+		"env -u HOME FOO=bar git push --force",
+		"env -uHOME FOO=bar git push --force",
+		"env --unset=HOME FOO=bar git push --force",
+		"env --chdir=subdirectory FOO=bar git push --force",
+		"env -- FOO=bar git push --force",
+	]) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(allowPolicy, command), "deny", command);
+	}
+	assert.equal(decideByPolicy(denyPolicy, "env printf git push --force"), undefined);
+	assert.equal(decideByPolicy(denyPolicy, "env FOO=bar"), "deny");
+	assert.equal(decideByPolicy(askPolicy, "env -S 'git push --force'"), "deny");
+});
+
 test("nested execution syntax never receives a regex allow", () => {
 	const policy = parsePolicyConfig(
 		JSON.stringify({ allow: ["^npm test", "^\\(npm test\\)$"] }),

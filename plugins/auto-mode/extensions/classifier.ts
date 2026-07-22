@@ -50,6 +50,18 @@ const COMMAND_PREFIXES = new Set([
 	"do",
 ]);
 
+const NAMED_COPROC_COMPOUND_STARTERS = new Set([
+	"{",
+	"if",
+	"case",
+	"select",
+	"for",
+	"while",
+	"until",
+	"[[",
+	"function",
+]);
+
 const OPTION_COMMAND_PREFIXES = new Set(["command", "builtin", "exec", "time", "env"]);
 const CURRENT_SHELL_EXECUTION = new Set(["eval", "source", ".", "trap"]);
 const ASSIGNMENT_BUILTINS = new Set(["declare", "export", "local", "readonly", "typeset"]);
@@ -95,6 +107,7 @@ function readShellWords(command: string): ShellWord[] {
 	const words: ShellWord[] = [];
 	let value = "";
 	let staticWord = true;
+	let shellKeyword = true;
 	let quote: "'" | '"' | undefined;
 	let active = false;
 	let expectExecutable = true;
@@ -107,8 +120,27 @@ function readShellWords(command: string): ShellWord[] {
 	let commandIndex = 0;
 	let pendingRedirection: "redirection" | "descriptor" | "syntax" | undefined;
 
+	const hasNamedCoprocPrefix = () => {
+		const name = words.at(-1);
+		const prefix = words.at(-2);
+		return (
+			prefix?.commandIndex === commandIndex &&
+			prefix.role === "executable" &&
+			prefix.value === "coproc" &&
+			name?.commandIndex === commandIndex &&
+			name.role === "executable" &&
+			name.static &&
+			/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name.value)
+		);
+	};
+
 	const finishWord = () => {
 		if (active) {
+			// A named coprocess places its optional name where this lightweight parser expects
+			// the executable. Reject the compound form so its real body cannot bypass guards.
+			if (shellKeyword && hasNamedCoprocPrefix() && NAMED_COPROC_COMPOUND_STARTERS.has(value)) {
+				throw new Error("named coprocesses cannot be classified safely");
+			}
 			let role: ShellWord["role"];
 			let optionValueOffset: number | undefined;
 			let ambiguousAttachedShortOptionValue = false;
@@ -172,6 +204,7 @@ function readShellWords(command: string): ShellWord[] {
 		}
 		value = "";
 		staticWord = true;
+		shellKeyword = true;
 		active = false;
 	};
 
@@ -209,6 +242,9 @@ function readShellWords(command: string): ShellWord[] {
 			continue;
 		}
 		if (character === "\n" || ";&|()".includes(character)) {
+			if (character === "(" && !active && hasNamedCoprocPrefix()) {
+				throw new Error("named coprocesses cannot be classified safely");
+			}
 			finishWord();
 			expectExecutable = true;
 			expectFunctionName = false;
@@ -240,6 +276,7 @@ function readShellWords(command: string): ShellWord[] {
 		}
 		if (character === "\\") {
 			active = true;
+			shellKeyword = false;
 			if (index + 1 >= command.length) {
 				staticWord = false;
 			} else if (command[index + 1] === "\n") {
@@ -252,6 +289,7 @@ function readShellWords(command: string): ShellWord[] {
 		}
 		if (character === "'" || character === '"') {
 			active = true;
+			shellKeyword = false;
 			quote = character;
 			continue;
 		}
