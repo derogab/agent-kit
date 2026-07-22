@@ -246,6 +246,28 @@ function readParameterExpansion(command: string, dollar: number): ParameterExpan
 	return undefined;
 }
 
+const WRAPPED_COMMAND_PREFIX =
+	/^(?:\(\s*|\{(?:[ \t]+|$)|(?:!|coproc|command|builtin|exec|time|env|if|then|else|elif|while|until|do)(?:[ \t]+|$))/;
+
+// Add the inner simple command only to deny/ask candidates. Allow still uses the original
+// shell parts, so removing wrappers can never broaden automatic execution.
+function unwrapPolicyCommand(part: string): string | undefined {
+	let command = part.trim();
+	let unwrapped = false;
+	const closingDelimiters: string[] = [];
+	for (let match = WRAPPED_COMMAND_PREFIX.exec(command); match; match = WRAPPED_COMMAND_PREFIX.exec(command)) {
+		if (match[0].startsWith("(")) closingDelimiters.push(")");
+		else if (match[0].startsWith("{")) closingDelimiters.push("}");
+		command = command.slice(match[0].length).trimStart();
+		unwrapped = true;
+	}
+	if (!unwrapped) return undefined;
+	for (const delimiter of closingDelimiters) {
+		if (command.endsWith(delimiter)) command = command.slice(0, -1).trimEnd();
+	}
+	return command || undefined;
+}
+
 // Extract commands conservatively for policy matching. Ambiguous executable syntax must not
 // earn a regex allow, and contexts that could hide an exact deny or ask match fail closed.
 function analyzeCommand(command: string, nestedExecutable = false): CommandAnalysis {
@@ -390,7 +412,9 @@ function analyzeCommand(command: string, nestedExecutable = false): CommandAnaly
 			nestedExecutable &&
 			character === "c" &&
 			atWordStart &&
-			/^(?:(?:!|coproc|\{)(?:[ \t]+|$))*$/.test(source.slice(start, index).trim()) &&
+			/^(?:(?:!|coproc|time|\{|\(|if|then|else|elif|while|until|do)(?:[ \t]+|$))*$/.test(
+				source.slice(start, index).trim(),
+			) &&
 			source.startsWith("case", index) &&
 			(index + 4 === source.length || /\s/.test(source[index + 4]))
 		) {
@@ -485,7 +509,11 @@ function analyzeCommand(command: string, nestedExecutable = false): CommandAnaly
 export function decideByPolicy(policy: PolicyConfig, command: string): PolicyDecision | undefined {
 	const normalized = command.trim();
 	const { parts, nestedParts, canAutoAllow, failClosed } = analyzeCommand(normalized);
-	const policyCandidates = [normalized, ...parts, ...nestedParts];
+	const parsedCandidates = [...parts, ...nestedParts];
+	const wrappedCandidates = parsedCandidates
+		.map(unwrapPolicyCommand)
+		.filter((candidate): candidate is string => candidate !== undefined);
+	const policyCandidates = [normalized, ...parsedCandidates, ...wrappedCandidates];
 
 	if (failClosed) return "deny";
 	if (policyCandidates.some((part) => matchesPattern(policy.deny, part))) {

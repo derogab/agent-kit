@@ -57,6 +57,18 @@ test("deny and ask rules apply on both sides of list operators", () => {
 	}
 });
 
+test("deny and ask rules apply to wrapped simple commands", () => {
+	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
+	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
+
+	for (const command of ["(git push)", "{ git push; }", "if true; then git push; fi", "command git push"]) {
+		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
+		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
+	}
+	assert.equal(decideByPolicy(denyPolicy, "printf command git push"), undefined);
+	assert.equal(decideByPolicy(denyPolicy, "command git push}"), undefined);
+});
+
 test("nested execution syntax never receives a regex allow", () => {
 	const policy = parsePolicyConfig(
 		JSON.stringify({ allow: ["^npm test", "^\\(npm test\\)$"] }),
@@ -351,6 +363,7 @@ test("ambiguous case patterns in command substitutions fail closed", () => {
 		"printf x $(! case x in x) git push;; esac)",
 		"printf x $(coproc case x in x) git push;; esac)",
 		"printf x $({ case x in x) git push;; esac; })",
+		"printf x $(if true; then case x in x) git push;; esac; fi)",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}

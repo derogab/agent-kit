@@ -141,8 +141,7 @@ test("targets that do not exist yet are judged by where creation would land", (t
 	assert.deepEqual(JSON.parse(attachedArchive.messages[0].content[0].text).filesystemCandidates[1], {
 		value: "-cf../outside.tar",
 		role: "argument",
-		status: "unavailable",
-		exists: false,
+		status: "ambiguous",
 	});
 
 	// Creation through a symlinked directory lands at the link target, not the lexical path.
@@ -150,7 +149,7 @@ test("targets that do not exist yet are judged by where creation would land", (t
 	assert.throws(() => buildClassifierContext("echo hi > linked-dir/new-file", cwd), /resolves outside/);
 	assert.throws(() => buildClassifierContext("echo hi > linked-dir/../new-file", cwd), /resolves outside/);
 
-	// Long option values are canonicalized; ambiguous attached short values stay unavailable for AI role judgment.
+	// Long option values are canonicalized; attached short values stay ambiguous for AI role judgment.
 	const outsideList = join(root, "outside-list");
 	writeFileSync(outsideList, "outside");
 	symlinkSync(outsideList, join(cwd, "linked-list"));
@@ -167,8 +166,7 @@ test("targets that do not exist yet are judged by where creation would land", (t
 	assert.deepEqual(attachedInput.filesystemCandidates[1], {
 		value: "-olinked-list",
 		role: "argument",
-		status: "unavailable",
-		exists: false,
+		status: "ambiguous",
 	});
 
 	// A dangling symlink target still fails closed.
@@ -195,6 +193,28 @@ test("attached time output paths remain filesystem candidates through command wr
 			option,
 		);
 	}
+});
+
+test("attached short-option values remain ambiguous even when the whole token exists", (t) => {
+	const { root, cwd } = createFixture(t);
+	const outsideFile = join(root, "outside-output");
+	writeFileSync(outsideFile, "outside");
+	symlinkSync(outsideFile, join(cwd, "link"));
+	writeFileSync(join(cwd, "-olink"), "decoy");
+
+	const context = buildClassifierContext("gcc -olink input.c", cwd);
+	const candidates = JSON.parse(context.messages[0].content[0].text).filesystemCandidates;
+	assert.deepEqual(candidates.find((candidate: { value: string }) => candidate.value === "-olink"), {
+		value: "-olink",
+		role: "argument",
+		status: "ambiguous",
+	});
+	const terminated = buildClassifierContext("gcc -- -olink input.c", cwd);
+	const terminatedCandidates = JSON.parse(terminated.messages[0].content[0].text).filesystemCandidates;
+	assert.equal(
+		terminatedCandidates.find((candidate: { value: string }) => candidate.value === "-olink").status,
+		"resolved",
+	);
 });
 
 test("the option terminator preserves a later equals-containing operand", (t) => {
@@ -235,8 +255,7 @@ test("path-shaped strings reach AI so it can determine their semantic role", (t)
 	assert.deepEqual(JSON.parse(regexContext.messages[0].content[0].text).filesystemCandidates[1], {
 		value: "-e/foo/",
 		role: "argument",
-		status: "unavailable",
-		exists: false,
+		status: "ambiguous",
 	});
 
 	const commented = buildClassifierContext("printf done # /etc/passwd\nprintf next", cwd);
@@ -450,6 +469,7 @@ test("directory-changing commands fail closed instead of resolving later operand
 		"if cd subdirectory; then cat linked-file; fi",
 		"time cd subdirectory && cat linked-file",
 		"time -p cd subdirectory && cat linked-file",
+		"coproc cd subdirectory && cat linked-file",
 		"A+=x cd subdirectory && cat linked-file",
 		"{ cd subdirectory; cat linked-file; }",
 		"function relocate { cd subdirectory; }; relocate; cat linked-file",
@@ -475,6 +495,7 @@ test("dynamic executable names and opaque current-shell execution fail closed", 
 		"$'cd' subdirectory",
 		"$'\\x63\\x64' subdirectory",
 		'$"cd" subdirectory',
+		'coproc "$command_name" argument',
 		'eval "cat /etc/passwd"',
 		"source ./helper.sh; cat linked-file",
 		". ./helper.sh; cat linked-file",
@@ -494,6 +515,7 @@ test("recognized inline interpreters fail closed instead of fabricating path met
 		"env -S \"bash -c 'cat /etc/passwd'\"",
 		"env --split-string=\"bash -c 'cat /etc/passwd'\"",
 		"exec -a custom sh -c 'cat /etc/passwd'",
+		"coproc bash -c 'cat /etc/passwd'",
 		"node -e 'readFileSync(\"/etc/passwd\")'",
 		"node --print 'require(\"fs\").readFileSync(\"/etc/passwd\")'",
 		"python3 -c 'open(\"/etc/passwd\")'",

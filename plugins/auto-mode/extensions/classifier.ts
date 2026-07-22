@@ -28,6 +28,7 @@ interface ShellWord {
 	role: "argument" | "assignment" | "executable" | "redirection" | "syntax";
 	commandIndex: number;
 	optionValueOffset?: number;
+	ambiguousAttachedShortOptionValue: boolean;
 }
 
 // Shell keywords and simple wrappers whose next non-option word is another executable.
@@ -37,6 +38,7 @@ const COMMAND_PREFIXES = new Set([
 	"exec",
 	"time",
 	"env",
+	"coproc",
 	"!",
 	"{",
 	"if",
@@ -109,6 +111,7 @@ function readShellWords(command: string): ShellWord[] {
 		if (active) {
 			let role: ShellWord["role"];
 			let optionValueOffset: number | undefined;
+			let ambiguousAttachedShortOptionValue = false;
 			if (pendingRedirection === "descriptor") {
 				role = staticWord && /^(?:[0-9]+-?|-)$/.test(value) ? "syntax" : "redirection";
 				pendingRedirection = undefined;
@@ -154,6 +157,7 @@ function readShellWords(command: string): ShellWord[] {
 					role = "argument";
 					const equals = !optionsEnded && value.startsWith("--") ? value.indexOf("=") : -1;
 					optionValueOffset = equals === -1 ? undefined : equals + 1;
+					ambiguousAttachedShortOptionValue = !optionsEnded && /^-[^-].+/.test(value);
 					if (staticWord && value === "--") optionsEnded = true;
 				}
 			}
@@ -163,6 +167,7 @@ function readShellWords(command: string): ShellWord[] {
 				role,
 				commandIndex,
 				optionValueOffset,
+				ambiguousAttachedShortOptionValue,
 			});
 		}
 		value = "";
@@ -437,13 +442,8 @@ function resolveCreatedTarget(
 	return { value: candidate.value, role: candidate.role, status: "resolved", canonicalPath, boundary: boundaryOf(canonicalPath) };
 }
 
-function hasAttachedShortOptionPath(candidate: FilesystemCandidate, word: ShellWord): boolean {
-	return (
-		candidate.role === "argument" &&
-		word.optionValueOffset === undefined &&
-		/^-[^-]/.test(candidate.value) &&
-		isClearlyPathLike(word)
-	);
+function hasAmbiguousAttachedShortOptionValue(candidate: FilesystemCandidate, word: ShellWord): boolean {
+	return candidate.role === "argument" && word.ambiguousAttachedShortOptionValue;
 }
 
 function followingArguments(words: ShellWord[], executableIndex: number): string[] {
@@ -596,7 +596,12 @@ export function buildClassifierContext(command: string, cwd: string) {
 		const candidate = filesystemCandidates[index];
 		const word = shellWords[index];
 		if (candidate.role === "syntax" || candidate.role === "executable") continue;
-		if (candidate.role !== "redirection" && hasAttachedShortOptionPath(candidate, word)) continue;
+		if (candidate.role !== "redirection" && hasAmbiguousAttachedShortOptionValue(candidate, word)) {
+			// Without command-specific option parsing, the token may combine a short flag and a
+			// path. Keep it ambiguous even if a decoy file matching the whole token exists.
+			filesystemCandidates[index] = { value: candidate.value, role: candidate.role, status: "ambiguous" };
+			continue;
+		}
 
 		if (candidate.role === "redirection") {
 			if (candidate.status === "resolved") {
