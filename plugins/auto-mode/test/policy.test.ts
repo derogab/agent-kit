@@ -88,6 +88,9 @@ test("the packaged example is valid", async () => {
 		"rm -xrf /tmp/example",
 		"rm -r --force /tmp/example",
 		"rm -f -r /tmp/example",
+		"rm -Rf /tmp/example",
+		"rm -fR /tmp/example",
+		"rm -R -f /tmp/example",
 		"rm --recursive --force /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
