@@ -249,9 +249,10 @@ function readParameterExpansion(command: string, dollar: number): ParameterExpan
 const WRAPPED_COMMAND_PREFIX =
 	/^(?:\(\s*|\{(?:[ \t]+|$)|(?:!|coproc|command|builtin|exec|time|env|if|then|else|elif|while|until|do)(?:[ \t]+|$))/;
 
-// Env assignments and options require command-specific parsing. Reject any uncertain prefix
-// instead of deriving an inner candidate that could omit the command covered by deny/ask rules.
-const UNCERTAIN_ENV_PREFIX = /^(?:-|['"\\$`]|[^ \t;&|()<>\n]*=)/;
+// Wrapper options and shell-computed executable names require command-specific parsing. Reject
+// them instead of deriving an inner candidate that could omit a deny/ask-covered command.
+const UNCERTAIN_WRAPPER_PREFIX = /^(?:-|[^ \t;&|()<>\n]*['"\\$`])/;
+const ENV_ASSIGNMENT_PREFIX = /^[^ \t;&|()<>\n]*=/;
 
 interface UnwrappedPolicyCommand {
 	command?: string;
@@ -270,7 +271,13 @@ function unwrapPolicyCommand(part: string): UnwrappedPolicyCommand {
 		const wrapper = match[0].trim();
 		command = command.slice(match[0].length).trimStart();
 		unwrapped = true;
-		if (wrapper === "env" && UNCERTAIN_ENV_PREFIX.test(command)) return { uncertain: true };
+		if (
+			(["command", "builtin", "exec", "time", "env"].includes(wrapper) &&
+				UNCERTAIN_WRAPPER_PREFIX.test(command)) ||
+			(wrapper === "env" && ENV_ASSIGNMENT_PREFIX.test(command))
+		) {
+			return { uncertain: true };
+		}
 	}
 	if (!unwrapped) return { uncertain: false };
 	for (const delimiter of closingDelimiters) {
@@ -486,6 +493,9 @@ function analyzeCommand(command: string, nestedExecutable = false): CommandAnaly
 
 		const operator = readControlOperator(source, index);
 		if (!operator) {
+			// Redirections have filesystem effects outside the executable's argument model. Always
+			// send them through the classifier, even when a prefix regex matches the command.
+			if (character === "<" || character === ">") canAutoAllow = false;
 			atWordStart = character === "<" || character === ">" || (character === "|" && command[index - 1] === ">");
 			continue;
 		}

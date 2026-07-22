@@ -61,12 +61,46 @@ test("deny and ask rules apply to wrapped simple commands", () => {
 	const denyPolicy = parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] }));
 	const askPolicy = parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] }));
 
-	for (const command of ["(git push)", "{ git push; }", "if true; then git push; fi", "command git push"]) {
+	for (const command of [
+		"(git push)",
+		"{ git push; }",
+		"if true; then git push; fi",
+		"command git push",
+		"exec git push",
+		"time git push",
+		"env git push",
+	]) {
 		assert.equal(decideByPolicy(denyPolicy, command), "deny", command);
 		assert.equal(decideByPolicy(askPolicy, command), "ask", command);
 	}
 	assert.equal(decideByPolicy(denyPolicy, "printf command git push"), undefined);
 	assert.equal(decideByPolicy(denyPolicy, "command git push}"), undefined);
+});
+
+test("wrapper options and dynamic executable spellings fail closed", () => {
+	const policies = [
+		parsePolicyConfig(JSON.stringify({ deny: ["^git push$"] })),
+		parsePolicyConfig(JSON.stringify({ ask: ["^git push$"] })),
+		parsePolicyConfig(JSON.stringify({ allow: ["^git push$"] })),
+	];
+	const commands = [
+		"command -p git push",
+		"command -- git push",
+		"builtin -- git push",
+		"exec -c git push",
+		"exec -a name git push",
+		"time -p git push",
+		"time -- git push",
+		"command 'git' push",
+		"command g\\it push",
+		'exec "$COMMAND" push',
+	];
+
+	for (const policy of policies) {
+		for (const command of commands) {
+			assert.equal(decideByPolicy(policy, command), "deny", command);
+		}
+	}
 });
 
 test("env assignments and options cannot bypass deny or ask policies", () => {
@@ -145,6 +179,8 @@ test("quoted and escaped shell syntax remains literal", () => {
 		"printf '%s' left\\;git\\ push",
 		"printf '%s' left\\|git\\ push",
 		"printf '%s' left\\&git\\ push",
+		"printf '%s' 'left>right'",
+		"printf '%s' left\\>right",
 		'printf "%s" "<(git push)"',
 		'printf "%s" "\\$(git push)"',
 		'printf "%s" "\\${value@P}"',
@@ -231,21 +267,9 @@ test("compound shell constructs cannot hide additional commands", () => {
 	]);
 });
 
-test("redirection ampersands are not mistaken for command separators", () => {
-	const policy = parsePolicyConfig(
-		JSON.stringify({
-			allow: [
-				"^npm test &>test.log$",
-				"^npm test &>>test.log$",
-				"^npm test 2>&1$",
-				"^npm test 2<&0$",
-				"^npm test >&2$",
-				"^npm test <&0$",
-				"^npm test >\\|test.log$",
-			],
-		}),
-	);
-	for (const command of [
+test("redirections never receive a regex allow", () => {
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
+	assertFallsThrough(policy, [
 		"npm test &>test.log",
 		"npm test &>>test.log",
 		"npm test 2>&1",
@@ -253,9 +277,13 @@ test("redirection ampersands are not mistaken for command separators", () => {
 		"npm test >&2",
 		"npm test <&0",
 		"npm test >|test.log",
-	]) {
-		assert.equal(decideByPolicy(policy, command), "allow", command);
-	}
+		"npm test > ~/.ssh/authorized_keys",
+		"npm test >>test.log",
+		"npm test <input.txt",
+		"npm test 2>errors.log",
+		"npm test &>output.log",
+		"npm test <<<input",
+	]);
 });
 
 test("expansions in redirections and input bodies cannot hide execution", () => {
