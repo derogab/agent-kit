@@ -1,0 +1,15 @@
+{
+  "allow": [
+    "^git status$",
+    "^git diff$",
+    "^npm (test|run (lint|build))$"
+  ],
+  "ask": [
+    "^git push(?:\\s|$)"
+  ],
+  "deny": [
+    "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
+    "(^|\\s)(sudo|doas)(\\s|$)",
+    "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?:\\s|$))"
+  ]
+}
