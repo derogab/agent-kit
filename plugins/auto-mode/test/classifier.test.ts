@@ -527,6 +527,19 @@ test("recognized inline interpreters fail closed instead of fabricating path met
 	assert.doesNotThrow(() => buildClassifierContext("grep -e/foo/ input.txt", cwd));
 });
 
+test("ansi-c quotes cannot hide later executable guards", (t) => {
+	const { cwd } = createFixture(t);
+	for (const [command, expected] of [
+		["echo $'\\''; cd /etc; cat shadow", /directory-changing commands cannot be classified safely/],
+		["echo $'\\''; eval 'cat /etc/passwd'", /current-shell execution cannot be classified safely/],
+		["echo $'\\''; source ./helper.sh", /current-shell execution cannot be classified safely/],
+		["echo $'\\''; bash -c 'cat /etc/passwd'", /inline interpreter code cannot be classified safely/],
+	] as const) {
+		assert.throws(() => buildClassifierContext(command, cwd), expected, command);
+	}
+	assert.doesNotThrow(() => buildClassifierContext("printf $'\\'' done", cwd));
+});
+
 test("named coprocess compound commands fail closed before their bodies are classified", (t) => {
 	const { cwd } = createFixture(t);
 	for (const command of [

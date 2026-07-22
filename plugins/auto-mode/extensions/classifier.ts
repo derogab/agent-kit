@@ -109,6 +109,7 @@ function readShellWords(command: string): ShellWord[] {
 	let staticWord = true;
 	let shellKeyword = true;
 	let quote: "'" | '"' | undefined;
+	let ansiQuote = false;
 	let active = false;
 	let expectExecutable = true;
 	let expectFunctionName = false;
@@ -213,8 +214,16 @@ function readShellWords(command: string): ShellWord[] {
 
 		if (quote === "'") {
 			active = true;
-			if (character === "'") quote = undefined;
-			else value += character;
+			if (character === "\\" && ansiQuote) {
+				value += character;
+				if (index + 1 < command.length) {
+					value += command[index + 1];
+					index += 1;
+				}
+			} else if (character === "'") {
+				quote = undefined;
+				ansiQuote = false;
+			} else value += character;
 			continue;
 		}
 
@@ -285,6 +294,16 @@ function readShellWords(command: string): ShellWord[] {
 				value += command[index + 1];
 				index += 1;
 			}
+			continue;
+		}
+		if (character === "$" && command[index + 1] === "'") {
+			active = true;
+			staticWord = false;
+			shellKeyword = false;
+			value += character;
+			quote = "'";
+			ansiQuote = true;
+			index += 1;
 			continue;
 		}
 		if (character === "'" || character === '"') {
