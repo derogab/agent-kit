@@ -34,8 +34,16 @@ This repository contains reusable plugins and skills for code agents.
 - Update nearby docs when behavior or usage changes.
 - Do not add unrelated changes.
 
+## Plugin Documentation
+
+- Treat every `plugins/<plugin>/README.md` as end-user documentation.
+- Document what the plugin does, along with user-facing installation, configuration, controls, requirements, and limitations.
+- Describe implementation only at a stable, high level. Do not document internal control flow, labels, code structure, or incidental mechanics.
+- Update a plugin README only when user-facing behavior or documentation changes; do not mirror every internal code change.
+
 ## Checks
 
 - Read `README.md` and the nearest local `README.md` before editing.
 - If you change a plugin or skill, verify links, names, and examples still match.
 - Be sure related docs stay synced and updated.
+- Avoid telling how stuff works internally (e.g. in plugins) in docs, maintain it abstract so that it doesn't become outdated with every change.

@@ -4,18 +4,9 @@ A Pi plugin that checks model-issued Bash commands before execution using explic
 
 > **WARNING**: this plugin is under active development and must be considered alpha software. Use it with caution.
 
-## How it works
+## Overview
 
-1. A matching deny pattern blocks the command.
-2. A matching ask pattern requests user confirmation.
-3. A command covered by allow patterns runs automatically.
-4. Anything else goes to the model classifier.
-
-Deny rules take precedence over ask and allow rules, and ask rules take precedence over allow rules. The classifier allows only `No_Risk`; risk labels, malformed output, and other errors block the command.
-
-Auto-mode only checks the command while making this decision. It does not execute or rewrite it. When active, it shows `auto-mode` in Pi's status line using the theme's success color.
-
-Use `/auto-mode` to view the current status and choose whether to enable or disable both checks. If the model is not in Hugging Face's standard cache, enabling asks before downloading it (about 5.6 GB).
+Auto-mode adds an optional safety check to Pi's built-in `bash` tool. It combines user-defined policy rules with a local classifier for commands not covered by those rules.
 
 ## Install
 
@@ -61,8 +52,10 @@ Create `auto-mode.json` in either or both locations:
 }
 ```
 
-Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression. Keep allow rules narrow because matching commands skip the classifier. If both files are missing, all commands use the classifier; if either file is invalid, commands are blocked.
+Use `allow` for commands that may run automatically, `ask` for commands that require confirmation, and `deny` for commands that must be blocked.
 
-This plugin gates Pi's built-in `bash` tool only. It is not a sandbox or a guarantee of safety.
+Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression, and more restrictive rules take priority. Keep allow rules narrow. If both files are missing, commands are checked by the classifier; if either file is invalid, commands are blocked.
+
+Auto-mode is not a sandbox or a guarantee of safety.
 
 The classifier uses SingGuard-NSFA-9B by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.
