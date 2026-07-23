@@ -1,5 +1,7 @@
+import { CLASSIFIER_MODEL } from "./model.ts";
+
 export const CLASSIFIER_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions";
-export const CLASSIFIER_MODEL = "inclusionAI/SingGuard-NSFA-9B-GGUF:Q4_K_M";
+export { CLASSIFIER_MODEL } from "./model.ts";
 
 export type ClassifierDecision = "allow" | "deny";
 

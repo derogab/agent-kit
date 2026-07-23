@@ -13,7 +13,9 @@ A Pi plugin that checks model-issued Bash commands before execution using explic
 
 Deny rules take precedence over ask and allow rules, and ask rules take precedence over allow rules. The classifier allows only `No_Risk`; risk labels, malformed output, and other errors block the command.
 
-Auto-mode only checks the command while making this decision. It does not execute or rewrite it.
+Auto-mode only checks the command while making this decision. It does not execute or rewrite it. When active, it shows `auto-mode` in Pi's status line using the theme's success color.
+
+Use `/auto-mode` for help, `/auto-mode off` to bypass both checks, and `/auto-mode on` to enable them. If the model is not in Hugging Face's standard cache, enabling asks before downloading it (about 5.6 GB).
 
 ## Install
 
@@ -30,7 +32,7 @@ llama-server \
   --hf-repo inclusionAI/SingGuard-NSFA-9B-GGUF:Q4_K_M
 ```
 
-The first run downloads the Q4_K_M model (about 5.6 GB).
+The local server must remain available while auto-mode is on.
 
 ## Configure
 

@@ -36,27 +36,42 @@ interface RecordedRequest {
 	init?: RequestInit;
 }
 
-function createHarness() {
+interface RegisteredCommand {
+	description?: string;
+	getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
+	handler: (args: string, context: any) => Promise<void>;
+}
+
+function createHarness(dependencies: Parameters<typeof autoMode>[1] = {}) {
 	let handler: ((event: any, context: any) => Promise<any>) | undefined;
+	let sessionStartHandler: ((event: any, context: any) => Promise<any>) | undefined;
 	let renderer: ((entry: any, options: any, theme: any) => { render(width: number): string[] }) | undefined;
+	let command: RegisteredCommand | undefined;
 	const entries: RecordedEntry[] = [];
 
 	autoMode({
 		on(event: string, callback: typeof handler) {
 			if (event === "tool_call") handler = callback;
+			if (event === "session_start") sessionStartHandler = callback;
 		},
 		registerEntryRenderer(type: string, callback: typeof renderer) {
 			assert.equal(type, "auto-mode-result");
 			renderer = callback;
 		},
+		registerCommand(name: string, options: RegisteredCommand) {
+			assert.equal(name, "auto-mode");
+			command = options;
+		},
 		appendEntry(type: string, data: RecordedEntry["data"]) {
 			entries.push({ type, data });
 		},
-	} as never);
+	} as never, dependencies);
 
 	assert.ok(handler);
+	assert.ok(sessionStartHandler);
 	assert.ok(renderer);
-	return { handler, renderer, entries };
+	assert.ok(command);
+	return { handler, sessionStartHandler, renderer, command, entries };
 }
 
 function createContext(cwd: string, overrides: Record<string, unknown> = {}) {
@@ -74,6 +89,35 @@ function createCwd(name: string) {
 	const cwd = join(fixtureRoot, name);
 	mkdirSync(cwd, { recursive: true });
 	return cwd;
+}
+
+function createCommandContext(name: string, confirm = async () => true) {
+	let status: { key: string; text: string | undefined } | undefined;
+	const notifications: Array<{ message: string; type: string | undefined }> = [];
+	let confirmationCount = 0;
+	const context = createContext(createCwd(name), {
+		ui: {
+			confirm: async () => {
+				confirmationCount++;
+				return confirm();
+			},
+			notify: (message: string, type?: string) => notifications.push({ message, type }),
+			setStatus: (key: string, text: string | undefined) => {
+				status = { key, text };
+			},
+			theme: { fg: (color: string, text: string) => `${color}:${text}` },
+		},
+	});
+	return {
+		context,
+		notifications,
+		get confirmationCount() {
+			return confirmationCount;
+		},
+		get status() {
+			return status;
+		},
+	};
 }
 
 function bashEvent(command: string) {
@@ -125,6 +169,134 @@ test("only Bash tool calls are handled", async () => {
 	);
 	assert.equal(result, undefined);
 	assert.deepEqual(entries, []);
+});
+
+test("the status line shows when auto-mode is active", async () => {
+	const { sessionStartHandler } = createHarness();
+	let status: { key: string; text: string | undefined } | undefined;
+	await sessionStartHandler({}, createContext(createCwd("status"), {
+		ui: {
+			setStatus: (key: string, text: string | undefined) => {
+				status = { key, text };
+			},
+			theme: { fg: (color: string, text: string) => `${color}:${text}` },
+		},
+	}));
+
+	assert.deepEqual(status, { key: "auto-mode", text: "success:auto-mode" });
+});
+
+test("/auto-mode shows help and completes its subcommands", async () => {
+	const { command } = createHarness();
+	const ui = createCommandContext("command-help");
+
+	await command.handler("", ui.context);
+	assert.match(ui.notifications[0].message, /Auto-mode is on/);
+	assert.match(ui.notifications[0].message, /\/auto-mode on/);
+	assert.match(ui.notifications[0].message, /\/auto-mode off/);
+	assert.deepEqual(command.getArgumentCompletions?.("o"), [
+		{ value: "on", label: "on" },
+		{ value: "off", label: "off" },
+	]);
+});
+
+test("/auto-mode off bypasses policy and classifier checks", async (t) => {
+	writeUserConfig({ deny: ["^rm -rf /$"] });
+	const requests = mockClassifier(t, []);
+	const { command, handler, entries } = createHarness();
+	const ui = createCommandContext("command-off");
+
+	await command.handler("off", ui.context);
+	const result = await handler(bashEvent("rm -rf /"), createContext(createCwd("command-off-bash")));
+
+	assert.equal(result, undefined);
+	assert.deepEqual(entries, []);
+	assert.deepEqual(requests, []);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.match(ui.notifications[0].message, /no longer checked/);
+});
+
+test("/auto-mode on uses a cached model without prompting or downloading", async () => {
+	let downloadCalled = false;
+	const { command } = createHarness({
+		findCachedModel: async () => "/cached/model.gguf",
+		downloadModel: async () => {
+			downloadCalled = true;
+			return "/cached/model.gguf";
+		},
+	});
+	const ui = createCommandContext("command-on-cached");
+
+	await command.handler("off", ui.context);
+	await command.handler("on", ui.context);
+
+	assert.equal(ui.confirmationCount, 0);
+	assert.equal(downloadCalled, false);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
+});
+
+test("/auto-mode on stays off when a model download is declined", async () => {
+	let downloadCalled = false;
+	const { command, handler } = createHarness({
+		findCachedModel: async () => undefined,
+		downloadModel: async () => {
+			downloadCalled = true;
+			return "/cached/model.gguf";
+		},
+	});
+	const ui = createCommandContext("command-on-declined", async () => false);
+
+	await command.handler("on", ui.context);
+
+	assert.equal(ui.confirmationCount, 1);
+	assert.equal(downloadCalled, false);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.match(ui.notifications.at(-1)?.message ?? "", /cannot start/);
+	assert.equal(
+		await handler(bashEvent("unchecked"), createContext(createCwd("command-declined-bash"))),
+		undefined,
+	);
+});
+
+test("/auto-mode on downloads an absent model after confirmation", async () => {
+	let downloadOptions: { signal?: AbortSignal } | undefined;
+	const abortController = new AbortController();
+	const { command } = createHarness({
+		findCachedModel: async () => undefined,
+		downloadModel: async (options) => {
+			downloadOptions = options;
+			return "/cached/model.gguf";
+		},
+	});
+	const ui = createCommandContext("command-on-download");
+	(ui.context as { signal?: AbortSignal }).signal = abortController.signal;
+
+	await command.handler("on", ui.context);
+
+	assert.equal(ui.confirmationCount, 1);
+	assert.equal(downloadOptions?.signal, abortController.signal);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.match(ui.notifications.at(-2)?.message ?? "", /Downloading/);
+	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
+});
+
+test("/auto-mode on stays off when model setup fails", async () => {
+	const { command } = createHarness({
+		findCachedModel: async () => undefined,
+		downloadModel: async () => {
+			throw new Error("download failed");
+		},
+	});
+	const ui = createCommandContext("command-on-failed");
+
+	await command.handler("on", ui.context);
+
+	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.deepEqual(ui.notifications.at(-1), {
+		message: "Auto-mode could not start: download failed",
+		type: "error",
+	});
 });
 
 test("policy decisions run before the model with deny, ask, allow precedence", async (t) => {

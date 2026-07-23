@@ -37,5 +37,8 @@
     "@earendil-works/pi-tui": "0.80.10",
     "@types/node": "24.12.4",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@huggingface/hub": "^2.13.3"
   }
 }

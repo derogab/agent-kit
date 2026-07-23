@@ -5,15 +5,18 @@ import {
 	getAgentDir,
 	isToolCallEventType,
 	type ExtensionAPI,
+	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { classifyCommand } from "./classifier.ts";
+import { downloadClassifierModel, findCachedClassifierModel } from "./model.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 const COMMAND_CHANGED_REASON = "Auto mode blocked because the Bash command changed while approval was pending";
+const STATUS_KEY = "auto-mode";
 
 function bashCommandIsUnchanged(input: { command: string }, command: string): boolean {
 	try {
@@ -49,7 +52,85 @@ async function confirmCommand(command: string, ctx: ExtensionContext): Promise<b
 
 type DecisionSource = "MODEL" | "POLICY";
 
-export default function (pi: ExtensionAPI) {
+interface AutoModeDependencies {
+	downloadModel?: typeof downloadClassifierModel;
+	findCachedModel?: typeof findCachedClassifierModel;
+}
+
+export default function (pi: ExtensionAPI, dependencies: AutoModeDependencies = {}) {
+	let active = true;
+	const downloadModel = dependencies.downloadModel ?? downloadClassifierModel;
+	const findCachedModel = dependencies.findCachedModel ?? findCachedClassifierModel;
+
+	function updateStatus(ctx: ExtensionContext, enabled: boolean) {
+		active = enabled;
+		ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("success", "auto-mode") : undefined);
+	}
+
+	function showCommandHelp(ctx: ExtensionCommandContext, type: "info" | "warning" = "info") {
+		ctx.ui.notify(
+			`Auto-mode is ${active ? "on" : "off"}. Use /auto-mode on to enable Bash checks or /auto-mode off to bypass them.`,
+			type,
+		);
+	}
+
+	pi.on("session_start", async (_event, ctx) => {
+		updateStatus(ctx, active);
+	});
+
+	pi.registerCommand("auto-mode", {
+		description: "Turn Bash policy and classifier checks on or off",
+		getArgumentCompletions: (prefix) =>
+			["on", "off"]
+				.filter((value) => value.startsWith(prefix.trim()))
+				.map((value) => ({ value, label: value })),
+		handler: async (args, ctx) => {
+			const subcommand = args.trim().toLowerCase();
+			if (subcommand === "") {
+				showCommandHelp(ctx);
+				return;
+			}
+			if (subcommand === "off") {
+				updateStatus(ctx, false);
+				ctx.ui.notify("Auto-mode is off. Bash commands are no longer checked.", "warning");
+				return;
+			}
+			if (subcommand !== "on") {
+				showCommandHelp(ctx, "warning");
+				return;
+			}
+
+			try {
+				if (!(await findCachedModel())) {
+					const confirmed =
+						ctx.hasUI &&
+						(await ctx.ui.confirm(
+							"Download auto-mode model?",
+							"The classifier model is not in the Hugging Face cache. Download it now? (about 5.6 GB)",
+							{ signal: ctx.signal },
+						));
+					if (!confirmed) {
+						updateStatus(ctx, false);
+						ctx.ui.notify("Auto-mode cannot start without its classifier model.", "warning");
+						return;
+					}
+
+					ctx.ui.notify("Downloading the auto-mode classifier model...", "info");
+					await downloadModel({ signal: ctx.signal });
+				}
+
+				updateStatus(ctx, true);
+				ctx.ui.notify("Auto-mode is on. Bash commands are checked.", "info");
+			} catch (error) {
+				updateStatus(ctx, false);
+				ctx.ui.notify(
+					`Auto-mode could not start: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+			}
+		},
+	});
+
 	pi.registerEntryRenderer<{ command: string; allowed: boolean; source: DecisionSource }>(
 		"auto-mode-result",
 		(entry, _options, theme) => {
@@ -63,7 +144,7 @@ export default function (pi: ExtensionAPI) {
 	);
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!isToolCallEventType("bash", event)) return;
+		if (!isToolCallEventType("bash", event) || !active) return;
 		const command = event.input.command;
 
 		let policyDecision;
