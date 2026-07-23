@@ -13,6 +13,8 @@ process.env.PI_CODING_AGENT_DIR = agentDirectory;
 mkdirSync(agentDirectory);
 
 const { default: autoMode } = await import("../extensions/auto-mode.ts");
+const ENABLE_OPTION = "Enable auto-mode";
+const DISABLE_OPTION = "Disable auto-mode";
 
 after(() => {
 	if (previousAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -38,7 +40,6 @@ interface RecordedRequest {
 
 interface RegisteredCommand {
 	description?: string;
-	getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
 	handler: (args: string, context: any) => Promise<void>;
 }
 
@@ -91,17 +92,28 @@ function createCwd(name: string) {
 	return cwd;
 }
 
-function createCommandContext(name: string, confirm = async () => true) {
+interface CommandContextOptions {
+	confirm?: () => Promise<boolean>;
+	selections?: Array<string | undefined>;
+}
+
+function createCommandContext(name: string, options: CommandContextOptions = {}) {
 	let status: { key: string; text: string | undefined } | undefined;
 	const notifications: Array<{ message: string; type: string | undefined }> = [];
+	const menus: Array<{ title: string; options: string[] }> = [];
+	const selections = [...(options.selections ?? [])];
 	let confirmationCount = 0;
 	const context = createContext(createCwd(name), {
 		ui: {
 			confirm: async () => {
 				confirmationCount++;
-				return confirm();
+				return options.confirm?.() ?? true;
 			},
 			notify: (message: string, type?: string) => notifications.push({ message, type }),
+			select: async (title: string, choices: string[]) => {
+				menus.push({ title, options: choices });
+				return selections.shift();
+			},
 			setStatus: (key: string, text: string | undefined) => {
 				status = { key, text };
 			},
@@ -110,6 +122,7 @@ function createCommandContext(name: string, confirm = async () => true) {
 	});
 	return {
 		context,
+		menus,
 		notifications,
 		get confirmationCount() {
 			return confirmationCount;
@@ -186,37 +199,38 @@ test("the status line shows when auto-mode is active", async () => {
 	assert.deepEqual(status, { key: "auto-mode", text: "success:auto-mode" });
 });
 
-test("/auto-mode shows help and completes its subcommands", async () => {
+test("/auto-mode shows its introduction, status, question, and choices", async () => {
 	const { command } = createHarness();
 	const ui = createCommandContext("command-help");
 
 	await command.handler("", ui.context);
-	assert.match(ui.notifications[0].message, /Auto-mode is on/);
-	assert.match(ui.notifications[0].message, /\/auto-mode on/);
-	assert.match(ui.notifications[0].message, /\/auto-mode off/);
-	assert.deepEqual(command.getArgumentCompletions?.("o"), [
-		{ value: "on", label: "on" },
-		{ value: "off", label: "off" },
-	]);
+	assert.equal(ui.menus.length, 1);
+	assert.match(ui.menus[0].title, /^Auto-mode checks Bash commands/);
+	assert.match(ui.menus[0].title, /Current status: enabled/);
+	assert.match(ui.menus[0].title, /What would you like to do\?/);
+	assert.deepEqual(ui.menus[0].options, [ENABLE_OPTION, DISABLE_OPTION]);
+	assert.deepEqual(ui.notifications, []);
 });
 
-test("/auto-mode off bypasses policy and classifier checks", async (t) => {
+test("disabling from /auto-mode bypasses policy and classifier checks", async (t) => {
 	writeUserConfig({ deny: ["^rm -rf /$"] });
 	const requests = mockClassifier(t, []);
 	const { command, handler, entries } = createHarness();
-	const ui = createCommandContext("command-off");
+	const ui = createCommandContext("command-off", { selections: [DISABLE_OPTION, undefined] });
 
-	await command.handler("off", ui.context);
+	await command.handler("", ui.context);
 	const result = await handler(bashEvent("rm -rf /"), createContext(createCwd("command-off-bash")));
+	await command.handler("", ui.context);
 
 	assert.equal(result, undefined);
 	assert.deepEqual(entries, []);
 	assert.deepEqual(requests, []);
 	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
 	assert.match(ui.notifications[0].message, /no longer checked/);
+	assert.match(ui.menus[1].title, /Current status: disabled/);
 });
 
-test("/auto-mode on uses a cached model without prompting or downloading", async () => {
+test("enabling from /auto-mode uses a cached model without prompting or downloading", async () => {
 	let downloadCalled = false;
 	const { command } = createHarness({
 		findCachedModel: async () => "/cached/model.gguf",
@@ -225,10 +239,12 @@ test("/auto-mode on uses a cached model without prompting or downloading", async
 			return "/cached/model.gguf";
 		},
 	});
-	const ui = createCommandContext("command-on-cached");
+	const ui = createCommandContext("command-on-cached", {
+		selections: [DISABLE_OPTION, ENABLE_OPTION],
+	});
 
-	await command.handler("off", ui.context);
-	await command.handler("on", ui.context);
+	await command.handler("", ui.context);
+	await command.handler("", ui.context);
 
 	assert.equal(ui.confirmationCount, 0);
 	assert.equal(downloadCalled, false);
@@ -236,7 +252,7 @@ test("/auto-mode on uses a cached model without prompting or downloading", async
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
-test("/auto-mode on stays off when a model download is declined", async () => {
+test("enabling from /auto-mode stays off when a model download is declined", async () => {
 	let downloadCalled = false;
 	const { command, handler } = createHarness({
 		findCachedModel: async () => undefined,
@@ -245,9 +261,12 @@ test("/auto-mode on stays off when a model download is declined", async () => {
 			return "/cached/model.gguf";
 		},
 	});
-	const ui = createCommandContext("command-on-declined", async () => false);
+	const ui = createCommandContext("command-on-declined", {
+		confirm: async () => false,
+		selections: [ENABLE_OPTION],
+	});
 
-	await command.handler("on", ui.context);
+	await command.handler("", ui.context);
 
 	assert.equal(ui.confirmationCount, 1);
 	assert.equal(downloadCalled, false);
@@ -259,7 +278,7 @@ test("/auto-mode on stays off when a model download is declined", async () => {
 	);
 });
 
-test("/auto-mode on downloads an absent model after confirmation", async () => {
+test("enabling from /auto-mode downloads an absent model after confirmation", async () => {
 	let downloadOptions: { signal?: AbortSignal } | undefined;
 	const abortController = new AbortController();
 	const { command } = createHarness({
@@ -269,10 +288,10 @@ test("/auto-mode on downloads an absent model after confirmation", async () => {
 			return "/cached/model.gguf";
 		},
 	});
-	const ui = createCommandContext("command-on-download");
+	const ui = createCommandContext("command-on-download", { selections: [ENABLE_OPTION] });
 	(ui.context as { signal?: AbortSignal }).signal = abortController.signal;
 
-	await command.handler("on", ui.context);
+	await command.handler("", ui.context);
 
 	assert.equal(ui.confirmationCount, 1);
 	assert.equal(downloadOptions?.signal, abortController.signal);
@@ -281,16 +300,16 @@ test("/auto-mode on downloads an absent model after confirmation", async () => {
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
-test("/auto-mode on stays off when model setup fails", async () => {
+test("enabling from /auto-mode stays off when model setup fails", async () => {
 	const { command } = createHarness({
 		findCachedModel: async () => undefined,
 		downloadModel: async () => {
 			throw new Error("download failed");
 		},
 	});
-	const ui = createCommandContext("command-on-failed");
+	const ui = createCommandContext("command-on-failed", { selections: [ENABLE_OPTION] });
 
-	await command.handler("on", ui.context);
+	await command.handler("", ui.context);
 
 	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
 	assert.deepEqual(ui.notifications.at(-1), {

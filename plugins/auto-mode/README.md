@@ -15,7 +15,7 @@ Deny rules take precedence over ask and allow rules, and ask rules take preceden
 
 Auto-mode only checks the command while making this decision. It does not execute or rewrite it. When active, it shows `auto-mode` in Pi's status line using the theme's success color.
 
-Use `/auto-mode` for help, `/auto-mode off` to bypass both checks, and `/auto-mode on` to enable them. If the model is not in Hugging Face's standard cache, enabling asks before downloading it (about 5.6 GB).
+Use `/auto-mode` to view the current status and choose whether to enable or disable both checks. If the model is not in Hugging Face's standard cache, enabling asks before downloading it (about 5.6 GB).
 
 ## Install
 

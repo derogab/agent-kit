@@ -5,7 +5,6 @@ import {
 	getAgentDir,
 	isToolCallEventType,
 	type ExtensionAPI,
-	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
@@ -17,6 +16,8 @@ import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 const COMMAND_CHANGED_REASON = "Auto mode blocked because the Bash command changed while approval was pending";
 const STATUS_KEY = "auto-mode";
+const ENABLE_OPTION = "Enable auto-mode";
+const DISABLE_OPTION = "Disable auto-mode";
 
 function bashCommandIsUnchanged(input: { command: string }, command: string): boolean {
 	try {
@@ -67,38 +68,29 @@ export default function (pi: ExtensionAPI, dependencies: AutoModeDependencies = 
 		ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("success", "auto-mode") : undefined);
 	}
 
-	function showCommandHelp(ctx: ExtensionCommandContext, type: "info" | "warning" = "info") {
-		ctx.ui.notify(
-			`Auto-mode is ${active ? "on" : "off"}. Use /auto-mode on to enable Bash checks or /auto-mode off to bypass them.`,
-			type,
-		);
-	}
-
 	pi.on("session_start", async (_event, ctx) => {
 		updateStatus(ctx, active);
 	});
 
 	pi.registerCommand("auto-mode", {
-		description: "Turn Bash policy and classifier checks on or off",
-		getArgumentCompletions: (prefix) =>
-			["on", "off"]
-				.filter((value) => value.startsWith(prefix.trim()))
-				.map((value) => ({ value, label: value })),
-		handler: async (args, ctx) => {
-			const subcommand = args.trim().toLowerCase();
-			if (subcommand === "") {
-				showCommandHelp(ctx);
-				return;
-			}
-			if (subcommand === "off") {
+		description: "Manage Bash policy and classifier checks",
+		handler: async (_args, ctx) => {
+			const choice = await ctx.ui.select(
+				[
+					"Auto-mode checks Bash commands with policy rules and a model classifier.",
+					`Current status: ${active ? "enabled" : "disabled"}`,
+					"What would you like to do?",
+				].join("\n\n"),
+				[ENABLE_OPTION, DISABLE_OPTION],
+				{ signal: ctx.signal },
+			);
+			if (choice === undefined) return;
+			if (choice === DISABLE_OPTION) {
 				updateStatus(ctx, false);
 				ctx.ui.notify("Auto-mode is off. Bash commands are no longer checked.", "warning");
 				return;
 			}
-			if (subcommand !== "on") {
-				showCommandHelp(ctx, "warning");
-				return;
-			}
+			if (choice !== ENABLE_OPTION) return;
 
 			try {
 				if (!(await findCachedModel())) {
