@@ -1,12 +1,8 @@
 # auto-mode
 
-A Pi plugin that checks model-issued Bash commands before execution using explicit policy rules and [SingGuard-NSFA-9B](https://huggingface.co/inclusionAI/SingGuard-NSFA-9B-GGUF).
+A Pi plugin that adds an optional safety check to Pi's built-in `bash` tool using explicit policy rules and a local classifier for commands not covered by those rules.
 
 > **WARNING**: this plugin is under active development and must be considered alpha software. Use it with caution.
-
-## Overview
-
-Auto-mode adds an optional safety check to Pi's built-in `bash` tool. It combines user-defined policy rules with a local classifier for commands not covered by those rules.
 
 ## Install
 
@@ -58,4 +54,4 @@ Rules from both files are combined. Each entry is a case-sensitive JavaScript re
 
 Auto-mode is not a sandbox or a guarantee of safety.
 
-The classifier uses SingGuard-NSFA-9B by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.
+The classifier uses [SingGuard-NSFA-9B](https://huggingface.co/inclusionAI/SingGuard-NSFA-9B-GGUF) by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.
