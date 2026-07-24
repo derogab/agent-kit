@@ -5,6 +5,7 @@ import type { ClassifierServer } from "../extensions/server.ts";
 
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
+const STATUS_OPTION = "Status";
 
 interface RegisteredCommand {
 	description?: string;
@@ -90,17 +91,29 @@ test("the status line shows when auto-mode is active", async () => {
 	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
 });
 
-test("/auto-mode shows its introduction, status, question, and choices", async () => {
+test("/auto-mode opens its main menu", async () => {
 	const { command } = createHarness();
 	const ui = createCommandContext();
 
 	await command.handler("", ui.context);
 
 	assert.equal(ui.menus.length, 1);
-	assert.match(ui.menus[0].title, /^Auto-mode checks Bash commands/);
-	assert.match(ui.menus[0].title, /Current status: enabled/);
-	assert.match(ui.menus[0].title, /What would you like to do\?/);
-	assert.deepEqual(ui.menus[0].options, [ENABLE_OPTION, DISABLE_OPTION]);
+	assert.equal(ui.menus[0].title, "Auto-mode");
+	assert.deepEqual(ui.menus[0].options, [STATUS_OPTION]);
+	assert.deepEqual(ui.notifications, []);
+});
+
+test("Status shows the introduction, current status, question, and actions", async () => {
+	const { command } = createHarness();
+	const ui = createCommandContext({ selections: [STATUS_OPTION] });
+
+	await command.handler("", ui.context);
+
+	assert.equal(ui.menus.length, 2);
+	assert.match(ui.menus[1].title, /^Auto-mode checks Bash commands/);
+	assert.match(ui.menus[1].title, /Current status: enabled/);
+	assert.match(ui.menus[1].title, /What would you like to do\?/);
+	assert.deepEqual(ui.menus[1].options, [ENABLE_OPTION, DISABLE_OPTION]);
 	assert.deepEqual(ui.notifications, []);
 });
 
@@ -116,7 +129,9 @@ test("disabling stops and enabling restarts the classifier server", async () => 
 			stopCount += 1;
 		},
 	});
-	const ui = createCommandContext({ selections: [DISABLE_OPTION, ENABLE_OPTION] });
+	const ui = createCommandContext({
+		selections: [STATUS_OPTION, DISABLE_OPTION, STATUS_OPTION, ENABLE_OPTION],
+	});
 
 	await command.handler("", ui.context);
 	await command.handler("", ui.context);
@@ -139,7 +154,7 @@ test("enabling forwards cancellation while waiting for the classifier server", a
 		},
 	});
 	const ui = createCommandContext({
-		selections: [ENABLE_OPTION],
+		selections: [STATUS_OPTION, ENABLE_OPTION],
 		signal: abortController.signal,
 	});
 
@@ -157,7 +172,7 @@ test("enabling stays off when classifier setup fails", async () => {
 			throw new Error("server failed");
 		},
 	});
-	const ui = createCommandContext({ selections: [ENABLE_OPTION] });
+	const ui = createCommandContext({ selections: [STATUS_OPTION, ENABLE_OPTION] });
 
 	await command.handler("", ui.context);
 

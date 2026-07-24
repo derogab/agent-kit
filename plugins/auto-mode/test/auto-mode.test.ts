@@ -52,12 +52,13 @@ test("the composition root connects the server, controls, guard, and result rend
 	assert.equal(rendererRegistered, true);
 
 	let status: string | undefined;
+	const selections = ["Status", "Disable auto-mode"];
 	await command.handler("", {
 		signal: undefined,
 		hasUI: true,
 		ui: {
 			notify() {},
-			select: async () => "Disable auto-mode",
+			select: async () => selections.shift(),
 			setStatus: (_key: string, text: string | undefined) => {
 				status = text;
 			},

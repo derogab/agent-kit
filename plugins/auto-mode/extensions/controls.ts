@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ClassifierServer } from "./server.ts";
 
 const STATUS_KEY = "auto-mode";
+const STATUS_OPTION = "Status";
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 
@@ -27,6 +28,9 @@ export function registerAutoModeControls(
 	pi.registerCommand("auto-mode", {
 		description: "Manage Bash policy and classifier checks",
 		handler: async (_args, ctx) => {
+			const section = await ctx.ui.select("Auto-mode", [STATUS_OPTION], { signal: ctx.signal });
+			if (section !== STATUS_OPTION) return;
+
 			const choice = await ctx.ui.select(
 				[
 					"Auto-mode checks Bash commands with policy rules and a model classifier.",

@@ -14,6 +14,10 @@ Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it avai
 Auto-mode starts and maintains it in the background on an available local port
 while enabled, downloading the model to the Hugging Face cache when needed.
 
+## Controls
+
+Run `/auto-mode`, then choose `Status` to enable or disable auto-mode.
+
 ## Configure
 
 Create `auto-mode.json` in either or both locations:
