@@ -83,7 +83,7 @@ export function registerAutoModeControls(
 				updateStatus(ctx, true);
 				ctx.ui.notify("Auto-mode is on. Bash commands are checked.", "info");
 			} catch (error) {
-				updateStatus(ctx, false);
+				updateStatus(ctx, true);
 				ctx.ui.notify(
 					`Auto-mode could not start: ${error instanceof Error ? error.message : String(error)}`,
 					"error",

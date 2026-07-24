@@ -66,10 +66,8 @@ export async function classifyCommand(
 		throw new Error("classifier server returned no text");
 	}
 
-	const decisions = outputs
-		.map(parseClassifierDecision)
-		.filter((decision): decision is ClassifierDecision => decision !== undefined);
-	if (decisions.length === 0) {
+	const decisions = outputs.map(parseClassifierDecision);
+	if (decisions.some((decision) => decision === undefined)) {
 		throw new Error("classifier did not return one well-formed <risks> result");
 	}
 

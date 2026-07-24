@@ -25,6 +25,8 @@ export interface ClassifierServerDependencies {
 	fetch?: typeof fetch;
 	findCachedModel?: typeof findCachedClassifierModel;
 	findFreePort?: typeof findFreePort;
+	healthCheckIntervalMs?: number;
+	healthCheckTimeoutMs?: number;
 	loadModel?: typeof loadClassifierModelPreference;
 	restartDelayMs?: number;
 	saveModel?: typeof saveClassifierModelPreference;
@@ -121,9 +123,11 @@ async function waitUntilHealthy(
 	serverProcess: ChildProcess,
 	fetchHealth: typeof fetch,
 	signal: AbortSignal,
+	intervalMs = HEALTH_CHECK_INTERVAL_MS,
+	timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
 ): Promise<void> {
-	const deadline = Date.now() + HEALTH_CHECK_TIMEOUT_MS;
-	while (Date.now() < deadline) {
+	const deadline = Date.now() + timeoutMs;
+	do {
 		if (serverProcess.exitCode !== null) {
 			throw new Error(`llama-server exited with code ${serverProcess.exitCode}`);
 		}
@@ -132,8 +136,8 @@ async function waitUntilHealthy(
 		} catch (error) {
 			if (signal.aborted) throw error;
 		}
-		await sleep(HEALTH_CHECK_INTERVAL_MS, signal);
-	}
+		await sleep(intervalMs, signal);
+	} while (Date.now() < deadline);
 	throw new Error("llama-server did not become ready in time");
 }
 
@@ -159,6 +163,9 @@ export function registerClassifierServer(
 	const fetchHealth = dependencies.fetch ?? fetch;
 	const findCachedModel = dependencies.findCachedModel ?? findCachedClassifierModel;
 	const getFreePort = dependencies.findFreePort ?? findFreePort;
+	const healthCheckIntervalMs =
+		dependencies.healthCheckIntervalMs ?? HEALTH_CHECK_INTERVAL_MS;
+	const healthCheckTimeoutMs = dependencies.healthCheckTimeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
 	const loadModel = dependencies.loadModel ?? loadClassifierModelPreference;
 	const launchServer = dependencies.spawnServer ?? spawnClassifierServer;
 	const firstRestartDelay = dependencies.restartDelayMs ?? 1_000;
@@ -243,21 +250,33 @@ export function registerClassifierServer(
 			});
 		});
 
-		await Promise.race([
-			waitUntilHealthy(
-				`http://${CLASSIFIER_HOST}:${port}/health`,
-				serverProcess,
-				fetchHealth,
-				signal,
-			),
-			startupFailure,
-		]);
-		if (ended || !active || currentGeneration !== generation || signal.aborted) throw abortError();
+		try {
+			await Promise.race([
+				waitUntilHealthy(
+					`http://${CLASSIFIER_HOST}:${port}/health`,
+					serverProcess,
+					fetchHealth,
+					signal,
+					healthCheckIntervalMs,
+					healthCheckTimeoutMs,
+				),
+				startupFailure,
+			]);
+			if (ended || !active || currentGeneration !== generation || signal.aborted) throw abortError();
 
-		ready = true;
-		restartAttempts = 0;
-		endpoint = classifierEndpoint;
-		return classifierEndpoint;
+			ready = true;
+			restartAttempts = 0;
+			endpoint = classifierEndpoint;
+			return classifierEndpoint;
+		} catch (error) {
+			if (ownedProcess === serverProcess) {
+				ownedProcess = undefined;
+				endpoint = undefined;
+			}
+			await stopProcess(serverProcess);
+			if (!isAbortError(error) && active && currentGeneration === generation) scheduleRestart();
+			throw error;
+		}
 	}
 
 	function start(): Promise<string> {

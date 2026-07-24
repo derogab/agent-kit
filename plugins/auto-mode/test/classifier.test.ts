@@ -104,6 +104,28 @@ test("a risk label wins if response fields disagree", async (t) => {
 	assert.equal(await classifyCommand("ambiguous command", CLASSIFIER_ENDPOINT), "deny");
 });
 
+test("a malformed non-empty response field fails closed", async (t) => {
+	t.mock.method(
+		globalThis,
+		"fetch",
+		(async () =>
+			new Response(
+				JSON.stringify({
+					choices: [{
+						message: {
+							content: "<risks>No_Risk</risks>",
+							reasoning_content: "Malformed reasoning output.",
+						},
+					}],
+				}),
+			)) as typeof fetch,
+	);
+	await assert.rejects(
+		classifyCommand("ambiguous command", CLASSIFIER_ENDPOINT),
+		/well-formed <risks>/,
+	);
+});
+
 test("HTTP failures fail closed", async (t) => {
 	t.mock.method(globalThis, "fetch", (async () => completion("ignored", 503)) as typeof fetch);
 	await assert.rejects(classifyCommand("npm test", CLASSIFIER_ENDPOINT), /HTTP 503/);

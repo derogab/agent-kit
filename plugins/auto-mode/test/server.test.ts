@@ -314,3 +314,41 @@ test("startup failures are reported without leaving auto-mode unguarded", async 
 	}]);
 	await harness.sessionShutdown();
 });
+
+test("a health timeout stops the failed server before a readiness retry", async () => {
+	const children = [new FakeProcess(), new FakeProcess()];
+	const ports = [49_163, 49_164];
+	let spawnCount = 0;
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => ports.shift() ?? 49_165,
+		healthCheckIntervalMs: 0,
+		healthCheckTimeoutMs: 0,
+		restartDelayMs: 0,
+		spawnServer: () => {
+			const child = children[spawnCount];
+			spawnCount += 1;
+			return child as unknown as ChildProcess;
+		},
+		fetch: (async () =>
+			spawnCount === 1
+				? new Response(null, { status: 503 })
+				: healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await assert.rejects(
+		harness.classifierServer.ensureReady(),
+		/llama-server did not become ready in time/,
+	);
+
+	assert.deepEqual(children[0].signals, ["SIGTERM"]);
+	assert.equal(
+		await harness.classifierServer.ensureReady(),
+		"http://127.0.0.1:49164/v1/chat/completions",
+	);
+	assert.equal(spawnCount, 2);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(children[1].signals, ["SIGTERM"]);
+});

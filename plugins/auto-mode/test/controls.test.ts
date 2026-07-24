@@ -205,7 +205,7 @@ test("enabling forwards cancellation while waiting for the classifier server", a
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
-test("enabling stays off when classifier setup fails", async () => {
+test("enabling stays active when classifier setup fails", async () => {
 	const { command, controller } = createHarness({
 		ensureReady: async () => {
 			throw new Error("server failed");
@@ -215,8 +215,8 @@ test("enabling stays off when classifier setup fails", async () => {
 
 	await command.handler("", ui.context);
 
-	assert.equal(controller.isActive(), false);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.equal(controller.isActive(), true);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
 	assert.deepEqual(ui.notifications.at(-1), {
 		message: "Auto-mode could not start: server failed",
 		type: "error",

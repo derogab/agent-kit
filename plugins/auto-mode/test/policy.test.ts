@@ -83,11 +83,24 @@ test("the packaged example is valid", async () => {
 	assert.equal(decideByPolicy(policy, "npm publish"), "ask");
 	assert.equal(decideByPolicy(policy, "sudo make install"), "deny");
 	for (const command of [
-		"git push --force",
+		"git push --force --no-verify",
 		"git push -f",
-		"git push origin --force-with-lease=main:abc",
+		"git push origin --force-with-lease",
+		"git push --force-with-lease=main:abc origin",
+		"git push origin -uf",
+		"git push -fu",
 		"rm -rf /tmp/example",
+		"rm -rf --no-preserve-root /tmp/example",
+		"rm /tmp/example -rf",
+		"rm -rfx /tmp/example",
 		"rm -fr /tmp/example",
+		"rm -xrf /tmp/example",
+		"rm -r --force /tmp/example",
+		"rm -f -r /tmp/example",
+		"rm -Rf /tmp/example",
+		"rm -fR /tmp/example",
+		"rm -R -f /tmp/example",
+		"rm --recursive --force /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}
@@ -98,6 +111,7 @@ test("the packaged example is valid", async () => {
 		"npm test > test.log",
 		"git status && npm publish",
 		"rm -r /tmp/example",
+		"rm -f /tmp/example",
 	]) {
 		assert.notEqual(decideByPolicy(policy, command), "allow", command);
 	}
