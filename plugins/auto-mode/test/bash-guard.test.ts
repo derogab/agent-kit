@@ -26,7 +26,7 @@ beforeEach(() => {
 	rmSync(userConfigPath, { force: true });
 });
 
-type DecisionSource = "MODEL" | "POLICY";
+type DecisionSource = "CLASSIFIER" | "POLICY";
 
 interface RecordedEntry {
 	type: string;
@@ -225,7 +225,7 @@ test("unmatched commands use the dedicated classifier server", async (t) => {
 
 	assert.equal(result, undefined);
 	assert.deepEqual(entries, [
-		{ type: "auto-mode-result", data: { command: "npm test", allowed: true, source: "MODEL" } },
+		{ type: "auto-mode-result", data: { command: "npm test", allowed: true, source: "CLASSIFIER" } },
 	]);
 	assert.equal(requests[0].input, CLASSIFIER_ENDPOINT);
 	assert.equal(requests[0].init?.signal, abortController.signal);
@@ -244,9 +244,9 @@ test("model risks and every classifier failure mode block", async (t) => {
 
 	const riskyHarness = createHarness();
 	const risky = await riskyHarness.handler(bashEvent("rm -rf /"), createContext(cwd));
-	assert.match(risky.reason, /Blocked by the model classifier/);
+	assert.match(risky.reason, /Blocked by the classifier/);
 	assert.deepEqual(riskyHarness.entries, [
-		{ type: "auto-mode-result", data: { command: "rm -rf /", allowed: false, source: "MODEL" } },
+		{ type: "auto-mode-result", data: { command: "rm -rf /", allowed: false, source: "CLASSIFIER" } },
 	]);
 
 	for (const expected of [/well-formed <risks>/, /HTTP 503/, /offline/]) {

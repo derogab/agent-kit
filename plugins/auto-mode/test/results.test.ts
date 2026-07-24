@@ -14,7 +14,7 @@ test("result rendering sanitizes the command and shows source and outcome", () =
 
 	const backgrounds: string[] = [];
 	const component = renderer(
-		{ data: { command: "printf \u001b[31mred", allowed: false, source: "MODEL" } },
+		{ data: { command: "printf \u001b[31mred", allowed: false, source: "CLASSIFIER" } },
 		{},
 		{
 			bg(name: string, text: string) {
@@ -24,6 +24,6 @@ test("result rendering sanitizes the command and shows source and outcome", () =
 		},
 	);
 	const rendered = component.render(80).join("\n");
-	assert.match(rendered, /printf \\u001b\[31mred ✗ MODEL/);
+	assert.match(rendered, /printf \\u001b\[31mred ✗ CLASSIFIER/);
 	assert.ok(backgrounds.every((name) => name === "toolErrorBg"));
 });

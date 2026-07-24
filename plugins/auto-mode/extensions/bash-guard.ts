@@ -74,7 +74,7 @@ export function registerBashGuard(
 		let decision = policyDecision;
 		let source: DecisionSource = "POLICY";
 		if (decision === undefined) {
-			source = "MODEL";
+			source = "CLASSIFIER";
 			try {
 				const endpoint = await classifierServer.ensureReady(ctx.signal);
 				decision = await classifyCommand(command, endpoint, ctx.signal);
@@ -101,7 +101,7 @@ export function registerBashGuard(
 				source,
 			});
 			const decisionSource =
-				source === "MODEL" ? "the model classifier" : `an auto-mode ${decision} rule`;
+				source === "CLASSIFIER" ? "the classifier" : `an auto-mode ${decision} rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
