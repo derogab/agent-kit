@@ -3,11 +3,14 @@ import { createServer } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	CLASSIFIER_ALIAS,
-	DEFAULT_CLASSIFIER_MODEL,
 	downloadClassifierModel,
 	findCachedClassifierModel,
 	type ClassifierModel,
 } from "./model.ts";
+import {
+	loadClassifierModelPreference,
+	saveClassifierModelPreference,
+} from "./preferences.ts";
 
 const CLASSIFIER_HOST = "127.0.0.1";
 const HEALTH_CHECK_INTERVAL_MS = 250;
@@ -22,7 +25,9 @@ export interface ClassifierServerDependencies {
 	fetch?: typeof fetch;
 	findCachedModel?: typeof findCachedClassifierModel;
 	findFreePort?: typeof findFreePort;
+	loadModel?: typeof loadClassifierModelPreference;
 	restartDelayMs?: number;
+	saveModel?: typeof saveClassifierModelPreference;
 	spawnServer?: SpawnServer;
 }
 
@@ -154,8 +159,10 @@ export function registerClassifierServer(
 	const fetchHealth = dependencies.fetch ?? fetch;
 	const findCachedModel = dependencies.findCachedModel ?? findCachedClassifierModel;
 	const getFreePort = dependencies.findFreePort ?? findFreePort;
+	const loadModel = dependencies.loadModel ?? loadClassifierModelPreference;
 	const launchServer = dependencies.spawnServer ?? spawnClassifierServer;
 	const firstRestartDelay = dependencies.restartDelayMs ?? 1_000;
+	const saveModel = dependencies.saveModel ?? saveClassifierModelPreference;
 
 	let active = false;
 	let sessionActive = false;
@@ -166,7 +173,7 @@ export function registerClassifierServer(
 	let restartTimer: NodeJS.Timeout | undefined;
 	let sessionAbort: AbortController | undefined;
 	let sessionContext: ExtensionContext | undefined;
-	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
+	let selectedModel = loadModel();
 	let startup: Promise<string> | undefined;
 
 	function scheduleRestart(): void {
@@ -301,6 +308,7 @@ export function registerClassifierServer(
 
 	async function selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void> {
 		if (model.size === selectedModel.size) return;
+		saveModel(model);
 		const restart = active;
 		await stop();
 		selectedModel = model;

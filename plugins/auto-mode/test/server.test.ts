@@ -40,7 +40,11 @@ function createHarness(dependencies: ClassifierServerDependencies) {
 			if (event === "session_start") sessionStart = handler;
 			if (event === "session_shutdown") sessionShutdown = handler;
 		},
-	} as never, dependencies);
+	} as never, {
+		loadModel: () => DEFAULT_CLASSIFIER_MODEL,
+		saveModel: () => {},
+		...dependencies,
+	});
 
 	assert.ok(sessionStart);
 	assert.ok(sessionShutdown);
@@ -61,6 +65,16 @@ test("a free non-default localhost port is allocated", async () => {
 	assert.equal(Number.isInteger(port), true);
 	assert.ok(port > 0 && port <= 65_535);
 	assert.notEqual(port, 8080);
+});
+
+test("the remembered model is restored when the server is registered", async () => {
+	const model = CLASSIFIER_MODELS.find((candidate) => candidate.size === "2B");
+	assert.ok(model);
+	const harness = createHarness({ loadModel: () => model });
+
+	assert.equal(harness.classifierServer.getModel(), model);
+
+	await harness.sessionShutdown();
 });
 
 test("session startup launches llama-server on the allocated port", async () => {
@@ -205,6 +219,7 @@ test("selecting a model restarts an active server with that model", async () => 
 	const ports = [49_157, 49_158];
 	const invocations: Array<readonly string[]> = [];
 	const requestedModels: ClassifierModel[] = [];
+	let savedModel: ClassifierModel | undefined;
 	const harness = createHarness({
 		findCachedModel: async (model) => {
 			const requestedModel = model ?? DEFAULT_CLASSIFIER_MODEL;
@@ -212,6 +227,9 @@ test("selecting a model restarts an active server with that model", async () => 
 			return `/cache/${requestedModel.size}.gguf`;
 		},
 		findFreePort: async () => ports.shift() ?? 49_159,
+		saveModel: (model) => {
+			savedModel = model;
+		},
 		spawnServer: (_command, args) => {
 			invocations.push(args);
 			return children[invocations.length - 1] as unknown as ChildProcess;
@@ -228,6 +246,7 @@ test("selecting a model restarts an active server with that model", async () => 
 
 	assert.deepEqual(children[0].signals, ["SIGTERM"]);
 	assert.equal(harness.classifierServer.getModel(), fourB);
+	assert.equal(savedModel, fourB);
 	assert.deepEqual(requestedModels, [DEFAULT_CLASSIFIER_MODEL, fourB]);
 	assert.equal(invocations[1][5], "/cache/4B.gguf");
 	assert.equal(invocations[1][7], CLASSIFIER_ALIAS);
