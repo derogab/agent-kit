@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach, type TestContext } from "node:test";
-import { CLASSIFIER_ENDPOINT, CLASSIFIER_MODEL } from "../extensions/classifier.ts";
+import { CLASSIFIER_MODEL } from "../extensions/classifier.ts";
+import type { ClassifierServer } from "../extensions/server.ts";
 
+const CLASSIFIER_ENDPOINT = "http://127.0.0.1:49152/v1/chat/completions";
 const fixtureRoot = mkdtempSync(join(tmpdir(), "pi-auto-mode-guard-test-"));
 const agentDirectory = join(fixtureRoot, "agent");
 const userConfigPath = join(agentDirectory, "auto-mode.json");
@@ -36,7 +38,9 @@ interface RecordedRequest {
 	init?: RequestInit;
 }
 
-function createHarness() {
+function createHarness(
+	classifierServer: ClassifierServer = { ensureReady: async () => CLASSIFIER_ENDPOINT },
+) {
 	let handler: ((event: any, context: any) => Promise<any>) | undefined;
 	const entries: RecordedEntry[] = [];
 
@@ -48,7 +52,7 @@ function createHarness() {
 		appendEntry(type: string, data: RecordedEntry["data"]) {
 			entries.push({ type, data });
 		},
-	} as never, { isActive: () => true });
+	} as never, { isActive: () => true }, classifierServer);
 
 	assert.ok(handler);
 	return { handler, entries };
@@ -252,6 +256,19 @@ test("model risks and every classifier failure mode block", async (t) => {
 		assert.match(result.reason, /^Auto mode classifier failed:/);
 		assert.deepEqual(entries, []);
 	}
+});
+
+test("classifier server failures block", async () => {
+	const { handler, entries } = createHarness({
+		ensureReady: async () => {
+			throw new Error("server unavailable");
+		},
+	});
+
+	const result = await handler(bashEvent("npm test"), createContext(createCwd("server-failure")));
+
+	assert.match(result.reason, /^Auto mode classifier failed: server unavailable/);
+	assert.deepEqual(entries, []);
 });
 
 test("the command is sealed only after model or confirmation approval", { timeout: 2_000 }, async (t) => {

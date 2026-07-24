@@ -11,6 +11,7 @@ import { classifyCommand } from "./classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
 import { appendAutoModeResult, type DecisionSource } from "./results.ts";
 import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
+import type { ClassifierServer } from "./server.ts";
 
 const USER_CONFIG_PATH = join(getAgentDir(), "auto-mode.json");
 const COMMAND_CHANGED_REASON = "Auto mode blocked because the Bash command changed while approval was pending";
@@ -51,7 +52,11 @@ async function confirmCommand(command: string, ctx: ExtensionContext): Promise<b
 	return ctx.ui.confirm("Allow Bash command?", sanitizeTerminalText(command));
 }
 
-export function registerBashGuard(pi: ExtensionAPI, state: AutoModeState): void {
+export function registerBashGuard(
+	pi: ExtensionAPI,
+	state: AutoModeState,
+	classifierServer: ClassifierServer,
+): void {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event) || !state.isActive()) return;
 		const command = event.input.command;
@@ -71,7 +76,8 @@ export function registerBashGuard(pi: ExtensionAPI, state: AutoModeState): void 
 		if (decision === undefined) {
 			source = "MODEL";
 			try {
-				decision = await classifyCommand(command, ctx.signal);
+				const endpoint = await classifierServer.ensureReady(ctx.signal);
+				decision = await classifyCommand(command, endpoint, ctx.signal);
 			} catch (error) {
 				return {
 					block: true,

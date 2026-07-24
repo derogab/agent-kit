@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	CLASSIFIER_ENDPOINT,
 	CLASSIFIER_MODEL,
 	classifyCommand,
 	formatClassifierInput,
 	parseClassifierDecision,
 } from "../extensions/classifier.ts";
+
+const CLASSIFIER_ENDPOINT = "http://127.0.0.1:49152/v1/chat/completions";
 
 function completion(content: unknown, status = 200): Response {
 	return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
@@ -59,7 +60,7 @@ test("classification uses the fixed local model and forwards cancellation", asyn
 		}) as typeof fetch,
 	);
 
-	assert.equal(await classifyCommand("npm test", abortController.signal), "allow");
+	assert.equal(await classifyCommand("npm test", CLASSIFIER_ENDPOINT, abortController.signal), "allow");
 	assert.ok(request);
 	assert.equal(request.input, CLASSIFIER_ENDPOINT);
 	assert.equal(request.init?.method, "POST");
@@ -81,7 +82,7 @@ test("llama.cpp reasoning_content responses are classified", async (t) => {
 		"fetch",
 		(async () => reasoningCompletion("Analysis.\n\n<risks>No_Risk</risks>")) as typeof fetch,
 	);
-	assert.equal(await classifyCommand("npm test"), "allow");
+	assert.equal(await classifyCommand("npm test", CLASSIFIER_ENDPOINT), "allow");
 });
 
 test("a risk label wins if response fields disagree", async (t) => {
@@ -100,18 +101,18 @@ test("a risk label wins if response fields disagree", async (t) => {
 				}),
 			)) as typeof fetch,
 	);
-	assert.equal(await classifyCommand("ambiguous command"), "deny");
+	assert.equal(await classifyCommand("ambiguous command", CLASSIFIER_ENDPOINT), "deny");
 });
 
 test("HTTP failures fail closed", async (t) => {
 	t.mock.method(globalThis, "fetch", (async () => completion("ignored", 503)) as typeof fetch);
-	await assert.rejects(classifyCommand("npm test"), /HTTP 503/);
+	await assert.rejects(classifyCommand("npm test", CLASSIFIER_ENDPOINT), /HTTP 503/);
 });
 
 test("missing or malformed model output fails closed", async (t) => {
 	const responses = [completion(null), completion("No_Risk")];
 	t.mock.method(globalThis, "fetch", (async () => responses.shift() ?? completion(null)) as typeof fetch);
 
-	await assert.rejects(classifyCommand("npm test"), /returned no text/);
-	await assert.rejects(classifyCommand("npm test"), /well-formed <risks>/);
+	await assert.rejects(classifyCommand("npm test", CLASSIFIER_ENDPOINT), /returned no text/);
+	await assert.rejects(classifyCommand("npm test", CLASSIFIER_ENDPOINT), /well-formed <risks>/);
 });

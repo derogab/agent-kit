@@ -1,6 +1,5 @@
 import { CLASSIFIER_MODEL } from "./model.ts";
 
-export const CLASSIFIER_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions";
 export { CLASSIFIER_MODEL } from "./model.ts";
 
 export type ClassifierDecision = "allow" | "deny";
@@ -36,8 +35,12 @@ export function parseClassifierDecision(output: string): ClassifierDecision | un
 	return risk === "No_Risk" ? "allow" : "deny";
 }
 
-export async function classifyCommand(command: string, signal?: AbortSignal): Promise<ClassifierDecision> {
-	const response = await fetch(CLASSIFIER_ENDPOINT, {
+export async function classifyCommand(
+	command: string,
+	endpoint: string,
+	signal?: AbortSignal,
+): Promise<ClassifierDecision> {
+	const response = await fetch(endpoint, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({

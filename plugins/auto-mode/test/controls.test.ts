@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-	registerAutoModeControls,
-	type AutoModeControlsDependencies,
-} from "../extensions/controls.ts";
+import { registerAutoModeControls } from "../extensions/controls.ts";
+import type { ClassifierServer } from "../extensions/server.ts";
 
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
@@ -13,7 +11,11 @@ interface RegisteredCommand {
 	handler: (args: string, context: any) => Promise<void>;
 }
 
-function createHarness(dependencies: AutoModeControlsDependencies = {}) {
+function createHarness(
+	classifierServer: ClassifierServer = {
+		ensureReady: async () => "http://127.0.0.1:49152/v1/chat/completions",
+	},
+) {
 	let sessionStartHandler: ((event: any, context: any) => Promise<any>) | undefined;
 	let command: RegisteredCommand | undefined;
 	const controller = registerAutoModeControls({
@@ -25,7 +27,7 @@ function createHarness(dependencies: AutoModeControlsDependencies = {}) {
 			assert.equal(name, "auto-mode");
 			command = options;
 		},
-	} as never, dependencies);
+	} as never, classifierServer);
 
 	assert.ok(sessionStartHandler);
 	assert.ok(command);
@@ -99,13 +101,12 @@ test("/auto-mode shows its introduction, status, question, and choices", async (
 	assert.deepEqual(ui.notifications, []);
 });
 
-test("enabling uses a cached model without prompting or downloading", async () => {
-	let downloadCalled = false;
+test("enabling waits for the classifier server", async () => {
+	let ensureCount = 0;
 	const { command, controller } = createHarness({
-		findCachedModel: async () => "/cached/model.gguf",
-		downloadModel: async () => {
-			downloadCalled = true;
-			return "/cached/model.gguf";
+		ensureReady: async () => {
+			ensureCount += 1;
+			return "http://127.0.0.1:49152/v1/chat/completions";
 		},
 	});
 	const ui = createCommandContext({ selections: [DISABLE_OPTION, ENABLE_OPTION] });
@@ -114,43 +115,19 @@ test("enabling uses a cached model without prompting or downloading", async () =
 	await command.handler("", ui.context);
 
 	assert.equal(ui.confirmationCount, 0);
-	assert.equal(downloadCalled, false);
+	assert.equal(ensureCount, 1);
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
-test("enabling stays off when a model download is declined", async () => {
-	let downloadCalled = false;
-	const { command, controller } = createHarness({
-		findCachedModel: async () => undefined,
-		downloadModel: async () => {
-			downloadCalled = true;
-			return "/cached/model.gguf";
-		},
-	});
-	const ui = createCommandContext({
-		confirm: async () => false,
-		selections: [ENABLE_OPTION],
-	});
-
-	await command.handler("", ui.context);
-
-	assert.equal(ui.confirmationCount, 1);
-	assert.equal(downloadCalled, false);
-	assert.equal(controller.isActive(), false);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
-	assert.match(ui.notifications.at(-1)?.message ?? "", /cannot start/);
-});
-
-test("enabling downloads an absent model after confirmation", async () => {
-	let downloadOptions: { signal?: AbortSignal } | undefined;
+test("enabling forwards cancellation while waiting for the classifier server", async () => {
+	let receivedSignal: AbortSignal | undefined;
 	const abortController = new AbortController();
 	const { command, controller } = createHarness({
-		findCachedModel: async () => undefined,
-		downloadModel: async (options) => {
-			downloadOptions = options;
-			return "/cached/model.gguf";
+		ensureReady: async (signal) => {
+			receivedSignal = signal;
+			return "http://127.0.0.1:49152/v1/chat/completions";
 		},
 	});
 	const ui = createCommandContext({
@@ -160,19 +137,16 @@ test("enabling downloads an absent model after confirmation", async () => {
 
 	await command.handler("", ui.context);
 
-	assert.equal(ui.confirmationCount, 1);
-	assert.equal(downloadOptions?.signal, abortController.signal);
+	assert.equal(receivedSignal, abortController.signal);
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
-	assert.match(ui.notifications.at(-2)?.message ?? "", /Downloading/);
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
-test("enabling stays off when model setup fails", async () => {
+test("enabling stays off when classifier setup fails", async () => {
 	const { command, controller } = createHarness({
-		findCachedModel: async () => undefined,
-		downloadModel: async () => {
-			throw new Error("download failed");
+		ensureReady: async () => {
+			throw new Error("server failed");
 		},
 	});
 	const ui = createCommandContext({ selections: [ENABLE_OPTION] });
@@ -182,7 +156,7 @@ test("enabling stays off when model setup fails", async () => {
 	assert.equal(controller.isActive(), false);
 	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
 	assert.deepEqual(ui.notifications.at(-1), {
-		message: "Auto-mode could not start: download failed",
+		message: "Auto-mode could not start: server failed",
 		type: "error",
 	});
 });

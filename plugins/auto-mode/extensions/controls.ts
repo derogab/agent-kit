@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { downloadClassifierModel, findCachedClassifierModel } from "./model.ts";
+import type { ClassifierServer } from "./server.ts";
 
 const STATUS_KEY = "auto-mode";
 const ENABLE_OPTION = "Enable auto-mode";
@@ -9,18 +9,11 @@ export interface AutoModeController {
 	isActive(): boolean;
 }
 
-export interface AutoModeControlsDependencies {
-	downloadModel?: typeof downloadClassifierModel;
-	findCachedModel?: typeof findCachedClassifierModel;
-}
-
 export function registerAutoModeControls(
 	pi: ExtensionAPI,
-	dependencies: AutoModeControlsDependencies = {},
+	classifierServer: ClassifierServer,
 ): AutoModeController {
 	let active = true;
-	const downloadModel = dependencies.downloadModel ?? downloadClassifierModel;
-	const findCachedModel = dependencies.findCachedModel ?? findCachedClassifierModel;
 
 	function updateStatus(ctx: ExtensionContext, enabled: boolean) {
 		active = enabled;
@@ -52,24 +45,7 @@ export function registerAutoModeControls(
 			if (choice !== ENABLE_OPTION) return;
 
 			try {
-				if (!(await findCachedModel())) {
-					const confirmed =
-						ctx.hasUI &&
-						(await ctx.ui.confirm(
-							"Download auto-mode model?",
-							"The classifier model is not in the Hugging Face cache. Download it now? (about 5.6 GB)",
-							{ signal: ctx.signal },
-						));
-					if (!confirmed) {
-						updateStatus(ctx, false);
-						ctx.ui.notify("Auto-mode cannot start without its classifier model.", "warning");
-						return;
-					}
-
-					ctx.ui.notify("Downloading the auto-mode classifier model...", "info");
-					await downloadModel({ signal: ctx.signal });
-				}
-
+				await classifierServer.ensureReady(ctx.signal);
 				updateStatus(ctx, true);
 				ctx.ui.notify("Auto-mode is on. Bash commands are checked.", "info");
 			} catch (error) {

@@ -10,16 +10,9 @@ A Pi plugin that adds an optional safety check to Pi's built-in `bash` tool usin
 pi install npm:@derogab/pi-auto-mode
 ```
 
-Run the local classifier and keep it available while using Pi:
-
-```bash
-llama-server \
-  --host 127.0.0.1 \
-  --port 8080 \
-  --hf-repo inclusionAI/SingGuard-NSFA-9B-GGUF:Q4_K_M
-```
-
-The local server must remain available while auto-mode is on.
+Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it available on your `PATH`. Auto-mode starts and
+maintains it in the background on an available local port, downloading the model
+to the Hugging Face cache when needed.
 
 ## Configure
 

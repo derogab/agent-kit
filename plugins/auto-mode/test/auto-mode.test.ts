@@ -18,9 +18,10 @@ after(() => {
 	rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
-test("the composition root connects controls, guard, and result rendering", async () => {
+test("the composition root connects the server, controls, guard, and result rendering", async () => {
 	let toolCallHandler: ((event: any, context: any) => Promise<any>) | undefined;
-	let sessionStartHandler: ((event: any, context: any) => Promise<any>) | undefined;
+	let sessionStartHandlers = 0;
+	let sessionShutdownHandlers = 0;
 	let command: { handler: (args: string, context: any) => Promise<void> } | undefined;
 	let rendererRegistered = false;
 	const entries: unknown[] = [];
@@ -28,7 +29,8 @@ test("the composition root connects controls, guard, and result rendering", asyn
 	autoMode({
 		on(event: string, callback: typeof toolCallHandler) {
 			if (event === "tool_call") toolCallHandler = callback;
-			if (event === "session_start") sessionStartHandler = callback;
+			if (event === "session_start") sessionStartHandlers += 1;
+			if (event === "session_shutdown") sessionShutdownHandlers += 1;
 		},
 		registerCommand(name: string, options: typeof command) {
 			assert.equal(name, "auto-mode");
@@ -44,7 +46,8 @@ test("the composition root connects controls, guard, and result rendering", asyn
 	} as never);
 
 	assert.ok(toolCallHandler);
-	assert.ok(sessionStartHandler);
+	assert.equal(sessionStartHandlers, 2);
+	assert.equal(sessionShutdownHandlers, 1);
 	assert.ok(command);
 	assert.equal(rendererRegistered, true);
 
