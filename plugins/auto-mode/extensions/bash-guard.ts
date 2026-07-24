@@ -55,7 +55,7 @@ async function confirmCommand(command: string, ctx: ExtensionContext): Promise<b
 export function registerBashGuard(
 	pi: ExtensionAPI,
 	state: AutoModeState,
-	classifierServer: ClassifierServer,
+	classifierServer: Pick<ClassifierServer, "ensureReady">,
 ): void {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event) || !state.isActive()) return;

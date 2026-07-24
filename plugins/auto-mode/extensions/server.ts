@@ -26,6 +26,7 @@ export interface ClassifierServerDependencies {
 
 export interface ClassifierServer {
 	ensureReady(signal?: AbortSignal): Promise<string>;
+	stop(): Promise<void>;
 }
 
 function abortError(): DOMException {
@@ -153,6 +154,7 @@ export function registerClassifierServer(
 	const firstRestartDelay = dependencies.restartDelayMs ?? 1_000;
 
 	let active = false;
+	let sessionActive = false;
 	let generation = 0;
 	let endpoint: string | undefined;
 	let ownedProcess: ChildProcess | undefined;
@@ -163,7 +165,7 @@ export function registerClassifierServer(
 	let startup: Promise<string> | undefined;
 
 	function scheduleRestart(): void {
-		if (!active || restartTimer) return;
+		if (!sessionActive || !active || restartTimer) return;
 		const delay = Math.min(firstRestartDelay * 2 ** restartAttempts, RESTART_DELAY_MAX_MS);
 		restartAttempts += 1;
 		restartTimer = setTimeout(() => {
@@ -263,25 +265,14 @@ export function registerClassifierServer(
 		return promise;
 	}
 
-	pi.on("session_start", (_event, ctx) => {
-		active = true;
-		generation += 1;
-		sessionAbort = new AbortController();
-		sessionContext = ctx;
-		void start().catch((error) => {
-			if (active && !isAbortError(error)) {
-				sessionContext?.ui.notify(`Auto-mode classifier could not start: ${errorMessage(error)}`, "error");
-			}
-		});
-	});
-
-	pi.on("session_shutdown", async () => {
+	async function stop(): Promise<void> {
 		active = false;
 		generation += 1;
 		sessionAbort?.abort();
 		sessionAbort = undefined;
-		sessionContext = undefined;
 		endpoint = undefined;
+		startup = undefined;
+		restartAttempts = 0;
 		if (restartTimer) {
 			clearTimeout(restartTimer);
 			restartTimer = undefined;
@@ -290,9 +281,38 @@ export function registerClassifierServer(
 		const serverProcess = ownedProcess;
 		ownedProcess = undefined;
 		if (serverProcess) await stopProcess(serverProcess);
+	}
+
+	function ensureReady(signal?: AbortSignal): Promise<string> {
+		if (!sessionActive) return Promise.reject(new Error("classifier server session is not active"));
+		if (!active) {
+			active = true;
+			generation += 1;
+			sessionAbort = new AbortController();
+		}
+		return withSignal(start(), signal);
+	}
+
+	pi.on("session_start", (_event, ctx) => {
+		sessionActive = true;
+		sessionContext = ctx;
+		const readiness = ensureReady();
+		const startGeneration = generation;
+		void readiness.catch((error) => {
+			if (sessionActive && active && generation === startGeneration && !isAbortError(error)) {
+				ctx.ui.notify(`Auto-mode classifier could not start: ${errorMessage(error)}`, "error");
+			}
+		});
+	});
+
+	pi.on("session_shutdown", async () => {
+		sessionActive = false;
+		sessionContext = undefined;
+		await stop();
 	});
 
 	return {
-		ensureReady: (signal) => withSignal(start(), signal),
+		ensureReady,
+		stop,
 	};
 }

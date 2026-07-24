@@ -39,7 +39,17 @@ export function registerAutoModeControls(
 			if (choice === undefined) return;
 			if (choice === DISABLE_OPTION) {
 				updateStatus(ctx, false);
-				ctx.ui.notify("Auto-mode is off. Bash commands are no longer checked.", "warning");
+				try {
+					await classifierServer.stop();
+					ctx.ui.notify("Auto-mode is off. Bash commands are no longer checked.", "warning");
+				} catch (error) {
+					ctx.ui.notify(
+						`Auto-mode is off, but its classifier server could not stop: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+						"error",
+					);
+				}
 				return;
 			}
 			if (choice !== ENABLE_OPTION) return;

@@ -152,14 +152,13 @@ test("session shutdown stops only the owned server", async () => {
 	await assert.rejects(harness.classifierServer.ensureReady(), /not active/);
 });
 
-test("an owned server is restarted on another free port after a crash", async () => {
+test("the server can be stopped and restarted while the session remains active", async () => {
 	const children = [new FakeProcess(), new FakeProcess()];
 	const ports = [49_155, 49_156];
 	let spawnCount = 0;
 	const harness = createHarness({
 		findCachedModel: async () => "/cache/model.gguf",
 		findFreePort: async () => ports.shift() ?? 49_157,
-		restartDelayMs: 0,
 		spawnServer: () => {
 			const child = children[spawnCount];
 			spawnCount += 1;
@@ -174,13 +173,48 @@ test("an owned server is restarted on another free port after a crash", async ()
 		"http://127.0.0.1:49155/v1/chat/completions",
 	);
 
+	await harness.classifierServer.stop();
+	assert.deepEqual(children[0].signals, ["SIGTERM"]);
+
+	assert.equal(
+		await harness.classifierServer.ensureReady(),
+		"http://127.0.0.1:49156/v1/chat/completions",
+	);
+	assert.equal(spawnCount, 2);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(children[1].signals, ["SIGTERM"]);
+});
+
+test("an owned server is restarted on another free port after a crash", async () => {
+	const children = [new FakeProcess(), new FakeProcess()];
+	const ports = [49_157, 49_158];
+	let spawnCount = 0;
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => ports.shift() ?? 49_159,
+		restartDelayMs: 0,
+		spawnServer: () => {
+			const child = children[spawnCount];
+			spawnCount += 1;
+			return child as unknown as ChildProcess;
+		},
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	assert.equal(
+		await harness.classifierServer.ensureReady(),
+		"http://127.0.0.1:49157/v1/chat/completions",
+	);
+
 	children[0].crash();
 	await new Promise((resolve) => setTimeout(resolve, 10));
 
 	assert.equal(spawnCount, 2);
 	assert.equal(
 		await harness.classifierServer.ensureReady(),
-		"http://127.0.0.1:49156/v1/chat/completions",
+		"http://127.0.0.1:49158/v1/chat/completions",
 	);
 	await harness.sessionShutdown();
 });
@@ -189,7 +223,7 @@ test("startup failures are reported without leaving auto-mode unguarded", async 
 	const child = new FakeProcess();
 	const harness = createHarness({
 		findCachedModel: async () => "/cache/model.gguf",
-		findFreePort: async () => 49_158,
+		findFreePort: async () => 49_160,
 		spawnServer: () => {
 			queueMicrotask(() => child.emit("error", new Error("spawn failed")));
 			return child as unknown as ChildProcess;

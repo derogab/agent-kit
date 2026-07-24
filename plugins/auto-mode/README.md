@@ -10,9 +10,9 @@ A Pi plugin that adds an optional safety check to Pi's built-in `bash` tool usin
 pi install npm:@derogab/pi-auto-mode
 ```
 
-Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it available on your `PATH`. Auto-mode starts and
-maintains it in the background on an available local port, downloading the model
-to the Hugging Face cache when needed.
+Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it available on your `PATH`.
+Auto-mode starts and maintains it in the background on an available local port
+while enabled, downloading the model to the Hugging Face cache when needed.
 
 ## Configure
 

@@ -12,10 +12,13 @@ interface RegisteredCommand {
 }
 
 function createHarness(
-	classifierServer: ClassifierServer = {
-		ensureReady: async () => "http://127.0.0.1:49152/v1/chat/completions",
-	},
+	overrides: Partial<ClassifierServer> = {},
 ) {
+	const classifierServer: ClassifierServer = {
+		ensureReady: async () => "http://127.0.0.1:49152/v1/chat/completions",
+		stop: async () => {},
+		...overrides,
+	};
 	let sessionStartHandler: ((event: any, context: any) => Promise<any>) | undefined;
 	let command: RegisteredCommand | undefined;
 	const controller = registerAutoModeControls({
@@ -101,12 +104,16 @@ test("/auto-mode shows its introduction, status, question, and choices", async (
 	assert.deepEqual(ui.notifications, []);
 });
 
-test("enabling waits for the classifier server", async () => {
+test("disabling stops and enabling restarts the classifier server", async () => {
 	let ensureCount = 0;
+	let stopCount = 0;
 	const { command, controller } = createHarness({
 		ensureReady: async () => {
 			ensureCount += 1;
 			return "http://127.0.0.1:49152/v1/chat/completions";
+		},
+		stop: async () => {
+			stopCount += 1;
 		},
 	});
 	const ui = createCommandContext({ selections: [DISABLE_OPTION, ENABLE_OPTION] });
@@ -115,6 +122,7 @@ test("enabling waits for the classifier server", async () => {
 	await command.handler("", ui.context);
 
 	assert.equal(ui.confirmationCount, 0);
+	assert.equal(stopCount, 1);
 	assert.equal(ensureCount, 1);
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });

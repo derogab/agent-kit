@@ -39,7 +39,9 @@ interface RecordedRequest {
 }
 
 function createHarness(
-	classifierServer: ClassifierServer = { ensureReady: async () => CLASSIFIER_ENDPOINT },
+	classifierServer: Pick<ClassifierServer, "ensureReady"> = {
+		ensureReady: async () => CLASSIFIER_ENDPOINT,
+	},
 ) {
 	let handler: ((event: any, context: any) => Promise<any>) | undefined;
 	const entries: RecordedEntry[] = [];
