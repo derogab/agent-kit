@@ -12,11 +12,11 @@ pi install npm:@derogab/pi-auto-mode
 
 Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it available on your `PATH`.
 Auto-mode starts and maintains it in the background on an available local port
-while enabled, downloading the model to the Hugging Face cache when needed.
+while enabled, downloading the selected model to the Hugging Face cache when needed.
 
 ## Controls
 
-Run `/auto-mode`, then choose `Status` to enable or disable auto-mode.
+Run `/auto-mode` to manage the plugin settings.
 
 ## Configure
 
@@ -51,4 +51,4 @@ Rules from both files are combined. Each entry is a case-sensitive JavaScript re
 
 Auto-mode is not a sandbox or a guarantee of safety.
 
-The classifier uses [SingGuard-NSFA-9B](https://huggingface.co/inclusionAI/SingGuard-NSFA-9B-GGUF) by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.
+The classifier uses the [0.8B](https://huggingface.co/inclusionAI/SingGuard-NSFA-0.8B-GGUF), [2B](https://huggingface.co/inclusionAI/SingGuard-NSFA-2B-GGUF), [4B](https://huggingface.co/inclusionAI/SingGuard-NSFA-4B-GGUF), or [9B](https://huggingface.co/inclusionAI/SingGuard-NSFA-9B-GGUF) SingGuard-NSFA model by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.

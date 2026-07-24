@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	CLASSIFIER_MODEL,
+	CLASSIFIER_ALIAS,
 	classifyCommand,
 	formatClassifierInput,
 	parseClassifierDecision,
@@ -48,7 +48,7 @@ test("only the classifier's exact no-risk label allows execution", () => {
 	}
 });
 
-test("classification uses the fixed local model and forwards cancellation", async (t) => {
+test("classification uses the local server alias and forwards cancellation", async (t) => {
 	const abortController = new AbortController();
 	let request: { input: string | URL | Request; init?: RequestInit } | undefined;
 	t.mock.method(
@@ -68,7 +68,7 @@ test("classification uses the fixed local model and forwards cancellation", asyn
 
 	const body = JSON.parse(String(request.init?.body));
 	assert.deepEqual(body, {
-		model: CLASSIFIER_MODEL,
+		model: CLASSIFIER_ALIAS,
 		messages: [{ role: "user", content: "<untrusted_output>\nnpm test\n</untrusted_output>" }],
 		temperature: 0,
 		max_tokens: 2048,

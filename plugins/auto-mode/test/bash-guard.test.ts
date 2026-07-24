@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach, type TestContext } from "node:test";
-import { CLASSIFIER_MODEL } from "../extensions/classifier.ts";
+import { CLASSIFIER_ALIAS } from "../extensions/classifier.ts";
 import type { ClassifierServer } from "../extensions/server.ts";
 
 const CLASSIFIER_ENDPOINT = "http://127.0.0.1:49152/v1/chat/completions";
@@ -232,7 +232,7 @@ test("unmatched commands use the dedicated classifier server", async (t) => {
 	assert.equal(requests[0].input, CLASSIFIER_ENDPOINT);
 	assert.equal(requests[0].init?.signal, abortController.signal);
 	const body = JSON.parse(String(requests[0].init?.body));
-	assert.equal(body.model, CLASSIFIER_MODEL);
+	assert.equal(body.model, CLASSIFIER_ALIAS);
 	assert.deepEqual(body.messages, [
 		{ role: "user", content: "<untrusted_output>\nnpm test\n</untrusted_output>" },
 	]);

@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { registerAutoModeControls } from "../extensions/controls.ts";
+import {
+	CLASSIFIER_MODELS,
+	DEFAULT_CLASSIFIER_MODEL,
+	type ClassifierModel,
+} from "../extensions/model.ts";
 import type { ClassifierServer } from "../extensions/server.ts";
 
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 const STATUS_OPTION = "Status";
+const MODEL_OPTION = "Model";
 
 interface RegisteredCommand {
 	description?: string;
@@ -15,8 +21,13 @@ interface RegisteredCommand {
 function createHarness(
 	overrides: Partial<ClassifierServer> = {},
 ) {
+	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
 	const classifierServer: ClassifierServer = {
 		ensureReady: async () => "http://127.0.0.1:49152/v1/chat/completions",
+		getModel: () => selectedModel,
+		selectModel: async (model) => {
+			selectedModel = model;
+		},
 		stop: async () => {},
 		...overrides,
 	};
@@ -99,8 +110,38 @@ test("/auto-mode opens its main menu", async () => {
 
 	assert.equal(ui.menus.length, 1);
 	assert.equal(ui.menus[0].title, "Auto-mode");
-	assert.deepEqual(ui.menus[0].options, [STATUS_OPTION]);
+	assert.deepEqual(ui.menus[0].options, [STATUS_OPTION, MODEL_OPTION]);
 	assert.deepEqual(ui.notifications, []);
+});
+
+test("Model shows the default and changes the selected model", async () => {
+	let selectedModel: ClassifierModel | undefined;
+	let receivedSignal: AbortSignal | undefined;
+	const abortController = new AbortController();
+	const { command } = createHarness({
+		getModel: () => selectedModel ?? DEFAULT_CLASSIFIER_MODEL,
+		selectModel: async (model, signal) => {
+			selectedModel = model;
+			receivedSignal = signal;
+		},
+	});
+	const ui = createCommandContext({
+		selections: [MODEL_OPTION, "4B", MODEL_OPTION],
+		signal: abortController.signal,
+	});
+
+	await command.handler("", ui.context);
+	await command.handler("", ui.context);
+
+	assert.equal(ui.menus[1].title, "Classifier model: 0.8B");
+	assert.deepEqual(ui.menus[1].options, CLASSIFIER_MODELS.map((model) => model.size));
+	assert.equal(ui.menus[3].title, "Classifier model: 4B");
+	assert.equal(selectedModel?.size, "4B");
+	assert.equal(receivedSignal, abortController.signal);
+	assert.deepEqual(ui.notifications, [{
+		message: "Classifier model set to 4B.",
+		type: "info",
+	}]);
 });
 
 test("Status shows the current status and actions", async () => {

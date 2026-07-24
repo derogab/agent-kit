@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CLASSIFIER_MODELS } from "./model.ts";
 import type { ClassifierServer } from "./server.ts";
 
 const STATUS_KEY = "auto-mode";
 const STATUS_OPTION = "Status";
+const MODEL_OPTION = "Model";
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 
@@ -28,7 +30,29 @@ export function registerAutoModeControls(
 	pi.registerCommand("auto-mode", {
 		description: "Manage Bash policy and classifier checks",
 		handler: async (_args, ctx) => {
-			const section = await ctx.ui.select("Auto-mode", [STATUS_OPTION], { signal: ctx.signal });
+			const section = await ctx.ui.select("Auto-mode", [STATUS_OPTION, MODEL_OPTION], { signal: ctx.signal });
+			if (section === MODEL_OPTION) {
+				const choice = await ctx.ui.select(
+					`Classifier model: ${classifierServer.getModel().size}`,
+					CLASSIFIER_MODELS.map((model) => model.size),
+					{ signal: ctx.signal },
+				);
+				const model = CLASSIFIER_MODELS.find((candidate) => candidate.size === choice);
+				if (!model) return;
+
+				try {
+					await classifierServer.selectModel(model, ctx.signal);
+					ctx.ui.notify(`Classifier model set to ${model.size}.`, "info");
+				} catch (error) {
+					ctx.ui.notify(
+						`Classifier model could not change: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+						"error",
+					);
+				}
+				return;
+			}
 			if (section !== STATUS_OPTION) return;
 
 			const choice = await ctx.ui.select(

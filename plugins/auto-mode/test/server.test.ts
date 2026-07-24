@@ -7,7 +7,12 @@ import {
 	registerClassifierServer,
 	type ClassifierServerDependencies,
 } from "../extensions/server.ts";
-import { CLASSIFIER_MODEL } from "../extensions/model.ts";
+import {
+	CLASSIFIER_ALIAS,
+	CLASSIFIER_MODELS,
+	DEFAULT_CLASSIFIER_MODEL,
+	type ClassifierModel,
+} from "../extensions/model.ts";
 
 class FakeProcess extends EventEmitter {
 	exitCode: number | null = null;
@@ -63,8 +68,12 @@ test("session startup launches llama-server on the allocated port", async () => 
 	let invocation: { command: string; args: readonly string[] } | undefined;
 	let healthEndpoint: string | URL | Request | undefined;
 	let downloadCalled = false;
+	let cachedModel: ClassifierModel | undefined;
 	const harness = createHarness({
-		findCachedModel: async () => "/cache/model.gguf",
+		findCachedModel: async (model) => {
+			cachedModel = model;
+			return "/cache/model.gguf";
+		},
 		downloadModel: async () => {
 			downloadCalled = true;
 			return "/cache/model.gguf";
@@ -84,6 +93,8 @@ test("session startup launches llama-server on the allocated port", async () => 
 	const endpoint = await harness.classifierServer.ensureReady();
 
 	assert.equal(downloadCalled, false);
+	assert.equal(cachedModel, DEFAULT_CLASSIFIER_MODEL);
+	assert.equal(harness.classifierServer.getModel(), DEFAULT_CLASSIFIER_MODEL);
 	assert.equal(endpoint, "http://127.0.0.1:49152/v1/chat/completions");
 	assert.equal(healthEndpoint, "http://127.0.0.1:49152/health");
 	assert.deepEqual(invocation, {
@@ -96,7 +107,7 @@ test("session startup launches llama-server on the allocated port", async () => 
 			"--model",
 			"/cache/model.gguf",
 			"--alias",
-			CLASSIFIER_MODEL,
+			CLASSIFIER_ALIAS,
 		],
 	});
 
@@ -106,10 +117,12 @@ test("session startup launches llama-server on the allocated port", async () => 
 test("a missing model is downloaded before the server starts", async () => {
 	const child = new FakeProcess();
 	let downloadSignal: AbortSignal | undefined;
+	let downloadedModel: ClassifierModel | undefined;
 	let spawnCount = 0;
 	const harness = createHarness({
 		findCachedModel: async () => undefined,
-		downloadModel: async (options) => {
+		downloadModel: async (model, options) => {
+			downloadedModel = model;
 			downloadSignal = options?.signal;
 			return "/cache/downloaded.gguf";
 		},
@@ -126,6 +139,7 @@ test("a missing model is downloaded before the server starts", async () => {
 
 	assert.ok(downloadSignal);
 	assert.equal(downloadSignal.aborted, false);
+	assert.equal(downloadedModel, DEFAULT_CLASSIFIER_MODEL);
 	assert.equal(spawnCount, 1);
 	assert.deepEqual(harness.notifications, [{
 		message: "Downloading the auto-mode classifier model in the background...",
@@ -186,13 +200,53 @@ test("the server can be stopped and restarted while the session remains active",
 	assert.deepEqual(children[1].signals, ["SIGTERM"]);
 });
 
-test("an owned server is restarted on another free port after a crash", async () => {
+test("selecting a model restarts an active server with that model", async () => {
 	const children = [new FakeProcess(), new FakeProcess()];
 	const ports = [49_157, 49_158];
+	const invocations: Array<readonly string[]> = [];
+	const requestedModels: ClassifierModel[] = [];
+	const harness = createHarness({
+		findCachedModel: async (model) => {
+			const requestedModel = model ?? DEFAULT_CLASSIFIER_MODEL;
+			requestedModels.push(requestedModel);
+			return `/cache/${requestedModel.size}.gguf`;
+		},
+		findFreePort: async () => ports.shift() ?? 49_159,
+		spawnServer: (_command, args) => {
+			invocations.push(args);
+			return children[invocations.length - 1] as unknown as ChildProcess;
+		},
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	const fourB = CLASSIFIER_MODELS.find((model) => model.size === "4B");
+	assert.ok(fourB);
+	await harness.classifierServer.selectModel(fourB);
+
+	assert.deepEqual(children[0].signals, ["SIGTERM"]);
+	assert.equal(harness.classifierServer.getModel(), fourB);
+	assert.deepEqual(requestedModels, [DEFAULT_CLASSIFIER_MODEL, fourB]);
+	assert.equal(invocations[1][5], "/cache/4B.gguf");
+	assert.equal(invocations[1][7], CLASSIFIER_ALIAS);
+	assert.equal(
+		await harness.classifierServer.ensureReady(),
+		"http://127.0.0.1:49158/v1/chat/completions",
+	);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(children[1].signals, ["SIGTERM"]);
+});
+
+test("an owned server is restarted on another free port after a crash", async () => {
+	const children = [new FakeProcess(), new FakeProcess()];
+	const ports = [49_159, 49_160];
 	let spawnCount = 0;
 	const harness = createHarness({
 		findCachedModel: async () => "/cache/model.gguf",
-		findFreePort: async () => ports.shift() ?? 49_159,
+		findFreePort: async () => ports.shift() ?? 49_161,
 		restartDelayMs: 0,
 		spawnServer: () => {
 			const child = children[spawnCount];
@@ -205,7 +259,7 @@ test("an owned server is restarted on another free port after a crash", async ()
 	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
 	assert.equal(
 		await harness.classifierServer.ensureReady(),
-		"http://127.0.0.1:49157/v1/chat/completions",
+		"http://127.0.0.1:49159/v1/chat/completions",
 	);
 
 	children[0].crash();
@@ -214,7 +268,7 @@ test("an owned server is restarted on another free port after a crash", async ()
 	assert.equal(spawnCount, 2);
 	assert.equal(
 		await harness.classifierServer.ensureReady(),
-		"http://127.0.0.1:49158/v1/chat/completions",
+		"http://127.0.0.1:49160/v1/chat/completions",
 	);
 	await harness.sessionShutdown();
 });
@@ -223,7 +277,7 @@ test("startup failures are reported without leaving auto-mode unguarded", async 
 	const child = new FakeProcess();
 	const harness = createHarness({
 		findCachedModel: async () => "/cache/model.gguf",
-		findFreePort: async () => 49_160,
+		findFreePort: async () => 49_162,
 		spawnServer: () => {
 			queueMicrotask(() => child.emit("error", new Error("spawn failed")));
 			return child as unknown as ChildProcess;

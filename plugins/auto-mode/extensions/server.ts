@@ -2,9 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	CLASSIFIER_MODEL,
+	CLASSIFIER_ALIAS,
+	DEFAULT_CLASSIFIER_MODEL,
 	downloadClassifierModel,
 	findCachedClassifierModel,
+	type ClassifierModel,
 } from "./model.ts";
 
 const CLASSIFIER_HOST = "127.0.0.1";
@@ -26,6 +28,8 @@ export interface ClassifierServerDependencies {
 
 export interface ClassifierServer {
 	ensureReady(signal?: AbortSignal): Promise<string>;
+	getModel(): ClassifierModel;
+	selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void>;
 	stop(): Promise<void>;
 }
 
@@ -162,6 +166,7 @@ export function registerClassifierServer(
 	let restartTimer: NodeJS.Timeout | undefined;
 	let sessionAbort: AbortController | undefined;
 	let sessionContext: ExtensionContext | undefined;
+	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
 	let startup: Promise<string> | undefined;
 
 	function scheduleRestart(): void {
@@ -177,11 +182,12 @@ export function registerClassifierServer(
 	}
 
 	async function startServer(currentGeneration: number, signal: AbortSignal): Promise<string> {
-		let modelPath = await findCachedModel();
+		const model = selectedModel;
+		let modelPath = await findCachedModel(model);
 		if (!modelPath) {
 			if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 			sessionContext?.ui.notify("Downloading the auto-mode classifier model in the background...", "info");
-			modelPath = await downloadModel({ signal });
+			modelPath = await downloadModel(model, { signal });
 		}
 		if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 
@@ -196,7 +202,7 @@ export function registerClassifierServer(
 			"--model",
 			modelPath,
 			"--alias",
-			CLASSIFIER_MODEL,
+			CLASSIFIER_ALIAS,
 		]);
 		ownedProcess = serverProcess;
 		const classifierEndpoint = `http://${CLASSIFIER_HOST}:${port}/v1/chat/completions`;
@@ -293,6 +299,14 @@ export function registerClassifierServer(
 		return withSignal(start(), signal);
 	}
 
+	async function selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void> {
+		if (model.size === selectedModel.size) return;
+		const restart = active;
+		await stop();
+		selectedModel = model;
+		if (restart) await ensureReady(signal);
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		sessionActive = true;
 		sessionContext = ctx;
@@ -313,6 +327,8 @@ export function registerClassifierServer(
 
 	return {
 		ensureReady,
+		getModel: () => selectedModel,
+		selectModel,
 		stop,
 	};
 }

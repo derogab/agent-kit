@@ -1,6 +1,6 @@
-import { CLASSIFIER_MODEL } from "./model.ts";
+import { CLASSIFIER_ALIAS } from "./model.ts";
 
-export { CLASSIFIER_MODEL } from "./model.ts";
+export { CLASSIFIER_ALIAS } from "./model.ts";
 
 export type ClassifierDecision = "allow" | "deny";
 
@@ -44,7 +44,7 @@ export async function classifyCommand(
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
-			model: CLASSIFIER_MODEL,
+			model: CLASSIFIER_ALIAS,
 			messages: [{ role: "user", content: formatClassifierInput(command) }],
 			temperature: 0,
 			max_tokens: 2048,
