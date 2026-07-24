@@ -1,6 +1,6 @@
 {
   "name": "@derogab/pi-auto-mode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Checks Bash commands before execution",
   "type": "module",
   "files": [
