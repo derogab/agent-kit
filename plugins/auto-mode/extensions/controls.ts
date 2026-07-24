@@ -32,11 +32,7 @@ export function registerAutoModeControls(
 			if (section !== STATUS_OPTION) return;
 
 			const choice = await ctx.ui.select(
-				[
-					"Auto-mode checks Bash commands with policy rules and a model classifier.",
-					`Current status: ${active ? "enabled" : "disabled"}`,
-					"What would you like to do?",
-				].join("\n\n"),
+				`Auto-mode status: ${active ? "enabled" : "disabled"}`,
 				[ENABLE_OPTION, DISABLE_OPTION],
 				{ signal: ctx.signal },
 			);

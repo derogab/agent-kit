@@ -103,16 +103,14 @@ test("/auto-mode opens its main menu", async () => {
 	assert.deepEqual(ui.notifications, []);
 });
 
-test("Status shows the introduction, current status, question, and actions", async () => {
+test("Status shows the current status and actions", async () => {
 	const { command } = createHarness();
 	const ui = createCommandContext({ selections: [STATUS_OPTION] });
 
 	await command.handler("", ui.context);
 
 	assert.equal(ui.menus.length, 2);
-	assert.match(ui.menus[1].title, /^Auto-mode checks Bash commands/);
-	assert.match(ui.menus[1].title, /Current status: enabled/);
-	assert.match(ui.menus[1].title, /What would you like to do\?/);
+	assert.equal(ui.menus[1].title, "Auto-mode status: enabled");
 	assert.deepEqual(ui.menus[1].options, [ENABLE_OPTION, DISABLE_OPTION]);
 	assert.deepEqual(ui.notifications, []);
 });
