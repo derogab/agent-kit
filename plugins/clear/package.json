@@ -1,0 +1,29 @@
+{
+  "name": "@derogab/pi-clear",
+  "version": "0.1.0",
+  "description": "Add /clear as an alias for /new in Pi",
+  "type": "module",
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/clear"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/clear.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
