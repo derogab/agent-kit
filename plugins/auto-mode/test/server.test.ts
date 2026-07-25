@@ -77,7 +77,7 @@ test("the remembered model is restored when the server is registered", async () 
 	await harness.sessionShutdown();
 });
 
-test("session startup launches llama-server on the allocated port", async () => {
+test("session startup launches llama serve on the allocated port", async () => {
 	const child = new FakeProcess();
 	let invocation: { command: string; args: readonly string[] } | undefined;
 	let healthEndpoint: string | URL | Request | undefined;
@@ -112,8 +112,9 @@ test("session startup launches llama-server on the allocated port", async () => 
 	assert.equal(endpoint, "http://127.0.0.1:49152/v1/chat/completions");
 	assert.equal(healthEndpoint, "http://127.0.0.1:49152/health");
 	assert.deepEqual(invocation, {
-		command: "llama-server",
+		command: "llama",
 		args: [
+			"serve",
 			"--host",
 			"127.0.0.1",
 			"--port",
@@ -248,8 +249,8 @@ test("selecting a model restarts an active server with that model", async () => 
 	assert.equal(harness.classifierServer.getModel(), fourB);
 	assert.equal(savedModel, fourB);
 	assert.deepEqual(requestedModels, [DEFAULT_CLASSIFIER_MODEL, fourB]);
-	assert.equal(invocations[1][5], "/cache/4B.gguf");
-	assert.equal(invocations[1][7], CLASSIFIER_ALIAS);
+	assert.equal(invocations[1][6], "/cache/4B.gguf");
+	assert.equal(invocations[1][8], CLASSIFIER_ALIAS);
 	assert.equal(
 		await harness.classifierServer.ensureReady(),
 		"http://127.0.0.1:49158/v1/chat/completions",
@@ -339,7 +340,7 @@ test("a health timeout stops the failed server before a readiness retry", async 
 	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
 	await assert.rejects(
 		harness.classifierServer.ensureReady(),
-		/llama-server did not become ready in time/,
+		/llama serve did not become ready in time/,
 	);
 
 	assert.deepEqual(children[0].signals, ["SIGTERM"]);

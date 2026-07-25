@@ -129,7 +129,7 @@ async function waitUntilHealthy(
 	const deadline = Date.now() + timeoutMs;
 	do {
 		if (serverProcess.exitCode !== null) {
-			throw new Error(`llama-server exited with code ${serverProcess.exitCode}`);
+			throw new Error(`llama serve exited with code ${serverProcess.exitCode}`);
 		}
 		try {
 			if ((await fetchHealth(healthEndpoint, { signal })).ok) return;
@@ -138,7 +138,7 @@ async function waitUntilHealthy(
 		}
 		await sleep(intervalMs, signal);
 	} while (Date.now() < deadline);
-	throw new Error("llama-server did not become ready in time");
+	throw new Error("llama serve did not become ready in time");
 }
 
 async function stopProcess(serverProcess: ChildProcess): Promise<void> {
@@ -208,7 +208,8 @@ export function registerClassifierServer(
 		const port = await getFreePort();
 		if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 
-		const serverProcess = launchServer("llama-server", [
+		const serverProcess = launchServer("llama", [
+			"serve",
 			"--host",
 			CLASSIFIER_HOST,
 			"--port",
@@ -242,7 +243,7 @@ export function registerClassifierServer(
 				if (active && currentGeneration === generation) scheduleRestart();
 				reject(
 					new Error(
-						`llama-server exited${code === null ? "" : ` with code ${code}`}${
+						`llama serve exited${code === null ? "" : ` with code ${code}`}${
 							exitSignal ? ` (${exitSignal})` : ""
 						}`,
 					),
