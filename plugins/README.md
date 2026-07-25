@@ -2,7 +2,7 @@
 
 | Plugin | Agent | Description |
 |--------|-------|-------------|
-| [auto-mode](./auto-mode/) | Pi | Automatically checks Bash commands before execution |
+| [auto-mode](./auto-mode/) | Pi | Checks Bash commands before execution |
 | [dev](./dev/) | Pi, Claude Code | Skills to help with everyday development tasks |
 | [exit](./exit/) | Pi | Adds `/exit` as an alias for `/quit` |
 | [git](./git/) | Pi, Claude Code | Git workflow skills for commits and pull requests |

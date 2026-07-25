@@ -1,25 +1,22 @@
 # auto-mode
 
-A Pi plugin that automatically checks model-issued Bash commands before execution.
+A Pi plugin that adds an optional safety check to Pi's built-in `bash` tool using explicit policy rules and a local classifier for commands not covered by those rules.
 
 > **WARNING**: this plugin is under active development and must be considered alpha software. Use it with caution.
-
-## How it works
-
-1. A matching deny pattern blocks the command.
-2. A matching ask pattern requests user confirmation.
-3. A command covered by allow patterns runs automatically.
-4. Anything else goes to a separate AI safety check.
-
-Deny rules take precedence over ask and allow rules, and ask rules take precedence over allow rules. The AI check also returns `ALLOW`, `ASK`, or `DENY`. If auto-mode cannot check a command safely, it blocks it.
-
-Auto-mode only checks the command while making this decision. It does not execute it, rewrite it, or change files. Pi can run the command only after an `ALLOW` or a confirmed `ASK`.
 
 ## Install
 
 ```bash
 pi install npm:@derogab/pi-auto-mode
 ```
+
+Install [`llama-server`](https://github.com/ggml-org/llama.cpp) and make it available on your `PATH`.
+Auto-mode starts and maintains it in the background on an available local port
+while enabled, downloading the selected model to the Hugging Face cache when needed.
+
+## Controls
+
+Run `/auto-mode` to manage the plugin settings.
 
 ## Configure
 
@@ -33,19 +30,25 @@ Create `auto-mode.json` in either or both locations:
   "allow": [
     "^git status$",
     "^git diff$",
-    "^npm (test|run (lint|build))$"
+    "^npm test$",
+    "^npm run (lint|build)$"
   ],
   "ask": [
-    "^git push(?:\\s|$)"
+    "^git push(?:\\s|$)",
+    "^npm publish(?:\\s|$)"
   ],
   "deny": [
     "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
     "(^|\\s)(sudo|doas)(\\s|$)",
-    "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?:\\s|$))"
+    "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--(?:r|re|rec|recu|recur|recurs|recursi|recursiv|recursive))(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--(?:f|fo|for|forc|force))(?:\\s|$))"
   ]
 }
 ```
 
-Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression. If both files are missing, commands use the AI phase; if either file is invalid, commands are blocked until it is fixed.
+Use `allow` for commands that may run automatically, `ask` for commands that require confirmation, and `deny` for commands that must be blocked.
 
-This plugin gates Pi's built-in `bash` tool only. It is a lightweight permission check, not a sandbox or a guarantee of safety.
+Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression, and more restrictive rules take priority. Keep allow rules narrow. If both files are missing, commands are checked by the classifier; if either file is invalid, commands are blocked.
+
+Auto-mode is not a sandbox or a guarantee of safety.
+
+The classifier uses the [0.8B](https://huggingface.co/inclusionAI/SingGuard-NSFA-0.8B-GGUF), [2B](https://huggingface.co/inclusionAI/SingGuard-NSFA-2B-GGUF), [4B](https://huggingface.co/inclusionAI/SingGuard-NSFA-4B-GGUF), or [9B](https://huggingface.co/inclusionAI/SingGuard-NSFA-9B-GGUF) SingGuard-NSFA model by the SingGuard Team at Ant Group's AI Security Lab, released under the Apache 2.0 license.
