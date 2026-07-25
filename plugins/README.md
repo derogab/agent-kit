@@ -3,6 +3,7 @@
 | Plugin | Agent | Description |
 |--------|-------|-------------|
 | [auto-mode](./auto-mode/) | Pi | Checks Bash commands before execution |
+| [clear](./clear/) | Pi | Adds `/clear` as an alias for `/new` |
 | [dev](./dev/) | Pi, Claude Code | Skills to help with everyday development tasks |
 | [exit](./exit/) | Pi | Adds `/exit` as an alias for `/quit` |
 | [git](./git/) | Pi, Claude Code | Git workflow skills for commits and pull requests |
@@ -19,6 +20,7 @@ Install the Pi plugin you need:
 
 ```bash
 pi install npm:@derogab/pi-auto-mode
+pi install npm:@derogab/pi-clear
 pi install npm:@derogab/pi-dev
 pi install npm:@derogab/pi-exit
 pi install npm:@derogab/pi-git
