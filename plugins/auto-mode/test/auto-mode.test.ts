@@ -18,13 +18,11 @@ after(() => {
 	rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
-test("the composition root connects the server, controls, guard, and result rendering", async () => {
+test("the composition root connects the server, controls, and guard", async () => {
 	let toolCallHandler: ((event: any, context: any) => Promise<any>) | undefined;
 	let sessionStartHandlers = 0;
 	let sessionShutdownHandlers = 0;
 	let command: { handler: (args: string, context: any) => Promise<void> } | undefined;
-	let rendererRegistered = false;
-	const entries: unknown[] = [];
 
 	autoMode({
 		on(event: string, callback: typeof toolCallHandler) {
@@ -36,20 +34,12 @@ test("the composition root connects the server, controls, guard, and result rend
 			assert.equal(name, "auto-mode");
 			command = options;
 		},
-		registerEntryRenderer(type: string) {
-			assert.equal(type, "auto-mode-result");
-			rendererRegistered = true;
-		},
-		appendEntry(_type: string, data: unknown) {
-			entries.push(data);
-		},
 	} as never);
 
 	assert.ok(toolCallHandler);
 	assert.equal(sessionStartHandlers, 2);
 	assert.equal(sessionShutdownHandlers, 1);
 	assert.ok(command);
-	assert.equal(rendererRegistered, true);
 
 	let status: string | undefined;
 	const selections = ["Status", "Disable auto-mode"];
@@ -80,5 +70,4 @@ test("the composition root connects the server, controls, guard, and result rend
 
 	assert.equal(status, undefined);
 	assert.equal(result, undefined);
-	assert.deepEqual(entries, []);
 });

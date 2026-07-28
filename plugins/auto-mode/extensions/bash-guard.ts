@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { classifyCommand } from "./classifier.ts";
 import { decideByPolicy, mergePolicyConfigs, parsePolicyConfig } from "./policy.ts";
-import { appendAutoModeResult, type DecisionSource } from "./results.ts";
 import { lockBashCommand, sanitizeTerminalText } from "./security.ts";
 import type { ClassifierServer } from "./server.ts";
 
@@ -72,9 +71,9 @@ export function registerBashGuard(
 		}
 
 		let decision = policyDecision;
-		let source: DecisionSource = "POLICY";
+		let usedClassifier = false;
 		if (decision === undefined) {
-			source = "CLASSIFIER";
+			usedClassifier = true;
 			try {
 				const endpoint = await classifierServer.ensureReady(ctx.signal);
 				decision = await classifyCommand(command, endpoint, ctx.signal);
@@ -95,13 +94,8 @@ export function registerBashGuard(
 
 		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(command, ctx)));
 		if (!allowed) {
-			appendAutoModeResult(pi, {
-				command,
-				allowed,
-				source,
-			});
 			const decisionSource =
-				source === "CLASSIFIER" ? "the classifier" : `an auto-mode ${decision} rule`;
+				usedClassifier ? "the classifier" : `the ${decision} policy rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,
@@ -124,10 +118,5 @@ export function registerBashGuard(
 				reason: `Auto mode could not secure Bash command: ${error instanceof Error ? error.message : String(error)}`,
 			};
 		}
-		appendAutoModeResult(pi, {
-			command,
-			allowed,
-			source,
-		});
 	});
 }
