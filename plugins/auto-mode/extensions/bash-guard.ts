@@ -95,7 +95,7 @@ export function registerBashGuard(
 		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(command, ctx)));
 		if (!allowed) {
 			const decisionSource =
-				usedClassifier ? "the classifier" : `an auto-mode ${decision} rule`;
+				usedClassifier ? "the classifier" : `the ${decision} policy rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,

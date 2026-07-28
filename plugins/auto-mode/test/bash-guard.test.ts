@@ -161,7 +161,7 @@ test("ask rules fail closed when confirmation is declined or unavailable", async
 		const result = await handler(event, context);
 		assert.deepEqual(result, {
 			block: true,
-			reason: "Blocked because an auto-mode ask rule was not confirmed",
+			reason: "Blocked because the ask policy rule was not confirmed",
 		}, name);
 		assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before, name);
 	}
@@ -372,7 +372,7 @@ test("deny decisions leave the Bash input descriptor unchanged", async () => {
 	const event = bashEvent("npm test");
 	const before = Object.getOwnPropertyDescriptor(event.input, "command");
 	const result = await handler(event, createContext(createCwd("denied-input")));
-	assert.match(result.reason, /Blocked by an auto-mode deny rule/);
+	assert.match(result.reason, /Blocked by the deny policy rule/);
 	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
 	event.input.command = "npm run lint";
 	assert.equal(event.input.command, "npm run lint");
