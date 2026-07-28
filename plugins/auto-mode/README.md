@@ -39,7 +39,7 @@ Create `auto-mode.json` in either or both locations:
     "^npm publish\\b.*$"
   ],
   "deny": [
-    "^git push\\b.*(-f|--force).*$",
+    "^git push\\b.*\\s(-f\\b|--force\\b)",
     "^(sudo|doas)\\b.*$",
     "^rm\\b.*-(rf|fr).*$"
   ]

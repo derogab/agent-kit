@@ -107,11 +107,18 @@ test("the packaged example is valid", async () => {
 	for (const command of [
 		"doas make install",
 		"git push --force",
+		"git push --force-with-lease",
 		"git push -f",
 		"rm -rf /tmp/example",
 		"rm -fr /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
+	}
+	for (const command of [
+		"git push origin feature-fix",
+		"git push origin refs/heads/feature:feature-fix",
+	]) {
+		assert.equal(decideByPolicy(policy, command), "ask", command);
 	}
 	for (const command of [
 		"git status --short",
