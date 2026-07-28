@@ -111,6 +111,10 @@ test("the packaged example is valid", async () => {
 		"git push -f",
 		"rm -rf /tmp/example",
 		"rm -fr /tmp/example",
+		"rm -r -f /tmp/example",
+		"rm -f -r /tmp/example",
+		"rm -R -f /tmp/example",
+		"rm --recursive --force /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}
