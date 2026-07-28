@@ -26,13 +26,6 @@ beforeEach(() => {
 	rmSync(userConfigPath, { force: true });
 });
 
-type DecisionSource = "CLASSIFIER" | "POLICY";
-
-interface RecordedEntry {
-	type: string;
-	data: { command: string; allowed: boolean; source: DecisionSource };
-}
-
 interface RecordedRequest {
 	input: string | URL | Request;
 	init?: RequestInit;
@@ -44,20 +37,16 @@ function createHarness(
 	},
 ) {
 	let handler: ((event: any, context: any) => Promise<any>) | undefined;
-	const entries: RecordedEntry[] = [];
 
 	registerBashGuard({
 		on(event: string, callback: typeof handler) {
 			assert.equal(event, "tool_call");
 			handler = callback;
 		},
-		appendEntry(type: string, data: RecordedEntry["data"]) {
-			entries.push({ type, data });
-		},
 	} as never, { isActive: () => true }, classifierServer);
 
 	assert.ok(handler);
-	return { handler, entries };
+	return { handler };
 }
 
 function createContext(cwd: string, overrides: Record<string, unknown> = {}) {
@@ -119,13 +108,12 @@ function deferred<T>() {
 }
 
 test("only Bash tool calls are handled", async () => {
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const result = await handler(
 		{ type: "tool_call", toolCallId: "call-1", toolName: "read", input: { path: "README.md" } },
 		createContext(createCwd("non-bash")),
 	);
 	assert.equal(result, undefined);
-	assert.deepEqual(entries, []);
 });
 
 test("policy decisions run before the model with deny, ask, allow precedence", async (t) => {
@@ -151,12 +139,9 @@ test("policy decisions run before the model with deny, ask, allow precedence", a
 		["echo ask", true],
 		["echo deny", false],
 	] as const) {
-		const { handler, entries } = createHarness();
+		const { handler } = createHarness();
 		const result = await handler(bashEvent(command), context);
 		assert.equal(result?.block, allowed ? undefined : true, command);
-		assert.deepEqual(entries, [
-			{ type: "auto-mode-result", data: { command, allowed, source: "POLICY" } },
-		]);
 	}
 
 	assert.deepEqual(confirmations, ["echo ask"]);
@@ -170,7 +155,7 @@ test("ask rules fail closed when confirmation is declined or unavailable", async
 		["declined", createContext(cwd, { ui: { confirm: async () => false } })],
 		["no UI", createContext(cwd, { hasUI: false })],
 	] as const) {
-		const { handler, entries } = createHarness();
+		const { handler } = createHarness();
 		const event = bashEvent("deploy");
 		const before = Object.getOwnPropertyDescriptor(event.input, "command");
 		const result = await handler(event, context);
@@ -178,7 +163,6 @@ test("ask rules fail closed when confirmation is declined or unavailable", async
 			block: true,
 			reason: "Blocked because an auto-mode ask rule was not confirmed",
 		}, name);
-		assert.equal(entries[0].data.allowed, false, name);
 		assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before, name);
 	}
 });
@@ -194,13 +178,12 @@ test("user and trusted project policy files are loaded on every call", async () 
 		[true, false],
 		[false, true],
 	] as const) {
-		const { handler, entries } = createHarness();
+		const { handler } = createHarness();
 		const result = await handler(
 			bashEvent("npm test"),
 			createContext(cwd, { isProjectTrusted: () => trusted }),
 		);
 		assert.equal(result?.block, allowed ? undefined : true, String(trusted));
-		assert.equal(entries[0].data.allowed, allowed, String(trusted));
 	}
 
 	writeUserConfig("not JSON");
@@ -219,16 +202,13 @@ test("user and trusted project policy files are loaded on every call", async () 
 test("unmatched commands use the dedicated classifier server", async (t) => {
 	const abortController = new AbortController();
 	const requests = mockClassifier(t, [completion("No_Risk")]);
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const result = await handler(
 		bashEvent("npm test"),
 		createContext(createCwd("model-request"), { signal: abortController.signal }),
 	);
 
 	assert.equal(result, undefined);
-	assert.deepEqual(entries, [
-		{ type: "auto-mode-result", data: { command: "npm test", allowed: true, source: "CLASSIFIER" } },
-	]);
 	assert.equal(requests[0].input, CLASSIFIER_ENDPOINT);
 	assert.equal(requests[0].init?.signal, abortController.signal);
 	const body = JSON.parse(String(requests[0].init?.body));
@@ -247,21 +227,17 @@ test("model risks and every classifier failure mode block", async (t) => {
 	const riskyHarness = createHarness();
 	const risky = await riskyHarness.handler(bashEvent("rm -rf /"), createContext(cwd));
 	assert.match(risky.reason, /Blocked by the classifier/);
-	assert.deepEqual(riskyHarness.entries, [
-		{ type: "auto-mode-result", data: { command: "rm -rf /", allowed: false, source: "CLASSIFIER" } },
-	]);
 
 	for (const expected of [/well-formed <risks>/, /HTTP 503/, /offline/]) {
-		const { handler, entries } = createHarness();
+		const { handler } = createHarness();
 		const result = await handler(bashEvent("npm test"), createContext(cwd));
 		assert.match(result.reason, expected);
 		assert.match(result.reason, /^Auto mode classifier failed:/);
-		assert.deepEqual(entries, []);
 	}
 });
 
 test("classifier server failures block", async () => {
-	const { handler, entries } = createHarness({
+	const { handler } = createHarness({
 		ensureReady: async () => {
 			throw new Error("server unavailable");
 		},
@@ -270,7 +246,6 @@ test("classifier server failures block", async () => {
 	const result = await handler(bashEvent("npm test"), createContext(createCwd("server-failure")));
 
 	assert.match(result.reason, /^Auto mode classifier failed: server unavailable/);
-	assert.deepEqual(entries, []);
 });
 
 test("the command is sealed only after model or confirmation approval", { timeout: 2_000 }, async (t) => {
@@ -287,7 +262,6 @@ test("the command is sealed only after model or confirmation approval", { timeou
 	const modelResult = modelHarness.handler(modelEvent, createContext(createCwd("mutation-lock")));
 	await modelStarted.promise;
 	assert.equal(Object.getOwnPropertyDescriptor(modelEvent.input, "command")?.writable, true);
-	assert.equal(modelHarness.entries.length, 0);
 	releaseModel.resolve();
 	assert.equal(await modelResult, undefined);
 	assert.equal(Object.getOwnPropertyDescriptor(modelEvent.input, "command")?.writable, false);
@@ -327,7 +301,7 @@ test("a command changed while model approval is pending is blocked", { timeout: 
 		return completion("No_Risk");
 	}]);
 
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const event = bashEvent("echo safe");
 	const resultPromise = handler(event, createContext(createCwd("mutation-during-check")));
 	await modelStarted.promise;
@@ -338,12 +312,11 @@ test("a command changed while model approval is pending is blocked", { timeout: 
 	assert.match(result.reason, /command changed while approval was pending/);
 	assert.equal(event.input.command, "echo changed");
 	assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.writable, true);
-	assert.deepEqual(entries, []);
 });
 
 test("a Bash input that cannot be sealed is blocked only after approval", async () => {
 	writeUserConfig({ allow: ["^npm test$"] });
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const event = bashEvent("npm test");
 	Object.defineProperty(event.input, "command", {
 		configurable: false,
@@ -353,12 +326,11 @@ test("a Bash input that cannot be sealed is blocked only after approval", async 
 	const result = await handler(event, createContext(createCwd("unfreezable-input")));
 	assert.match(result.reason, /^Auto mode could not secure Bash command:/);
 	assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.get?.(), "npm test");
-	assert.deepEqual(entries, []);
 });
 
 test("sealing uses the exact command snapshot from a stable getter", async () => {
 	writeUserConfig({ allow: ["^echo safe$"] });
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const event = bashEvent("echo safe");
 	let reads = 0;
 	Object.defineProperty(event.input, "command", {
@@ -373,12 +345,11 @@ test("sealing uses the exact command snapshot from a stable getter", async () =>
 	assert.equal(result, undefined);
 	assert.equal(reads, 2);
 	assert.equal(event.input.command, "echo safe");
-	assert.equal(entries[0].data.command, "echo safe");
 });
 
 test("an unreadable command fails the integrity check without changing its input", async () => {
 	writeUserConfig({ allow: ["^echo safe$"] });
-	const { handler, entries } = createHarness();
+	const { handler } = createHarness();
 	const event = bashEvent("echo safe");
 	let reads = 0;
 	Object.defineProperty(event.input, "command", {
@@ -393,7 +364,6 @@ test("an unreadable command fails the integrity check without changing its input
 	const result = await handler(event, createContext(createCwd("unreadable-input")));
 	assert.match(result.reason, /command changed while approval was pending/);
 	assert.deepEqual(Object.getOwnPropertyDescriptor(event.input, "command"), before);
-	assert.deepEqual(entries, []);
 });
 
 test("deny decisions leave the Bash input descriptor unchanged", async () => {
