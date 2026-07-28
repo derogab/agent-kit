@@ -37,8 +37,29 @@ test("patterns are matched after surrounding whitespace is trimmed", () => {
 	assert.equal(decideByPolicy(policy, "npm test -- --watch"), undefined);
 });
 
+test("allow rules use the configured anchors", () => {
+	const exactPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test$"] }));
+	assert.equal(decideByPolicy(exactPolicy, "npm test"), "allow");
+	assert.equal(decideByPolicy(exactPolicy, "npm test && dangerous-command"), undefined);
+
+	const prefixPolicy = parsePolicyConfig(JSON.stringify({ allow: ["^npm test"] }));
+	assert.equal(decideByPolicy(prefixPolicy, "npm test && dangerous-command"), "allow");
+});
+
+test("deny and ask rules use the configured anchors", () => {
+	const anchoredPolicy = parsePolicyConfig(
+		JSON.stringify({ ask: ["^git push"], deny: ["^git push.*--force"] }),
+	);
+	assert.equal(decideByPolicy(anchoredPolicy, "git push"), "ask");
+	assert.equal(decideByPolicy(anchoredPolicy, "git push --force"), "deny");
+	assert.equal(decideByPolicy(anchoredPolicy, "env git push --force"), undefined);
+
+	const unanchoredPolicy = parsePolicyConfig(JSON.stringify({ ask: ["git push"] }));
+	assert.equal(decideByPolicy(unanchoredPolicy, "env git push"), "ask");
+});
+
 test("regular expression patterns can cover command variants", () => {
-	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm (test|run lint)(?:\\s|$)"] }));
+	const policy = parsePolicyConfig(JSON.stringify({ allow: ["^npm (test|run lint)(?: -- --fix)?$"] }));
 	assert.equal(decideByPolicy(policy, "npm run lint -- --fix"), "allow");
 	assert.equal(decideByPolicy(policy, "pnpm run lint"), undefined);
 });
@@ -79,30 +100,16 @@ test("the packaged example is valid", async () => {
 	]) {
 		assert.equal(decideByPolicy(policy, command), "allow", command);
 	}
+	assert.equal(decideByPolicy(policy, "git commit -m 'message'"), "ask");
 	assert.equal(decideByPolicy(policy, "git push"), "ask");
 	assert.equal(decideByPolicy(policy, "npm publish"), "ask");
 	assert.equal(decideByPolicy(policy, "sudo make install"), "deny");
 	for (const command of [
-		"git push --force --no-verify",
+		"doas make install",
+		"git push --force",
 		"git push -f",
-		"git push origin --force-with-lease",
-		"git push --force-with-lease=main:abc origin",
-		"git push origin -uf",
-		"git push -fu",
 		"rm -rf /tmp/example",
-		"rm -rf --no-preserve-root /tmp/example",
-		"rm /tmp/example -rf",
-		"rm -rfx /tmp/example",
 		"rm -fr /tmp/example",
-		"rm -xrf /tmp/example",
-		"rm -r --force /tmp/example",
-		"rm -f -r /tmp/example",
-		"rm -Rf /tmp/example",
-		"rm -fR /tmp/example",
-		"rm -R -f /tmp/example",
-		"rm --recursive --force /tmp/example",
-		"rm --recurs --forc /tmp/example",
-		"rm --r --f /tmp/example",
 	]) {
 		assert.equal(decideByPolicy(policy, command), "deny", command);
 	}

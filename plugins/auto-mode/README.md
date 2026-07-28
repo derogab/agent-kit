@@ -34,20 +34,19 @@ Create `auto-mode.json` in either or both locations:
     "^npm run (lint|build)$"
   ],
   "ask": [
-    "^git push(?:\\s|$)",
-    "^npm publish(?:\\s|$)"
+    "^git commit\\b.*$",
+    "^git push\\b.*$",
+    "^npm publish\\b.*$"
   ],
   "deny": [
-    "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
-    "(^|\\s)(sudo|doas)(\\s|$)",
-    "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--(?:r|re|rec|recu|recur|recurs|recursi|recursiv|recursive))(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--(?:f|fo|for|forc|force))(?:\\s|$))"
+    "^git push\\b.*(-f|--force).*$",
+    "^(sudo|doas)\\b.*$",
+    "^rm\\b.*-(rf|fr).*$"
   ]
 }
 ```
 
-Use `allow` for commands that may run automatically, `ask` for commands that require confirmation, and `deny` for commands that must be blocked.
-
-Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression, and more restrictive rules take priority. Keep allow rules narrow. If both files are missing, commands are checked by the classifier; if either file is invalid, commands are blocked.
+Rules are checked in order: `deny`, `ask`, `allow`, then the classifier. Each rule is a case-sensitive JavaScript regular expression matched as written against the command. Rules from both files are combined. Missing files are ignored; invalid files block commands.
 
 Auto-mode is not a sandbox or a guarantee of safety.
 
