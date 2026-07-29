@@ -39,8 +39,8 @@ Create `auto-mode.json` in either or both locations:
     "^npm publish\\b.*$"
   ],
   "deny": [
-    "^git push\\b.*\\s(-f\\b|--force\\b)",
-    "^(sudo|doas)\\b.*$",
+    "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
+    "(^|\\s)(sudo|doas)(\\s|$)",
     "\\brm\\b(?=[\\s\\S]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--(?:r|re|rec|recu|recur|recurs|recursi|recursiv|recursive))(?:\\s|$))(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--(?:f|fo|for|forc|force))(?:\\s|$))"
   ]
 }
