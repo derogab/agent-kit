@@ -34,9 +34,9 @@ Create `auto-mode.json` in either or both locations:
     "^npm run (lint|build)$"
   ],
   "ask": [
-    "^git commit\\b.*$",
-    "^git push\\b.*$",
-    "^npm publish\\b.*$"
+    "^git commit(?:\\s|$)",
+    "^git push(?:\\s|$)",
+    "^npm publish(?:\\s|$)"
   ],
   "deny": [
     "^git push(?=\\s|$)(?=[\\s\\S]*\\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force(?:-with-lease)?(?:=\\S+)?)(?:\\s|$))",
