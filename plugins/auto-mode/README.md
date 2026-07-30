@@ -34,6 +34,7 @@ Create `auto-mode.json` in either or both locations:
     "^npm run (lint|build)$"
   ],
   "ask": [
+    "^git commit(?:\\s|$)",
     "^git push(?:\\s|$)",
     "^npm publish(?:\\s|$)"
   ],
@@ -45,9 +46,7 @@ Create `auto-mode.json` in either or both locations:
 }
 ```
 
-Use `allow` for commands that may run automatically, `ask` for commands that require confirmation, and `deny` for commands that must be blocked.
-
-Rules from both files are combined. Each entry is a case-sensitive JavaScript regular expression, and more restrictive rules take priority. Keep allow rules narrow. If both files are missing, commands are checked by the classifier; if either file is invalid, commands are blocked.
+Rules are checked in order: `deny`, `ask`, `allow`, then the classifier. Each rule is a case-sensitive JavaScript regular expression matched as written against the command. Rules from both files are combined. Missing files are ignored; invalid files block commands.
 
 Auto-mode is not a sandbox or a guarantee of safety.
 

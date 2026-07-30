@@ -6,6 +6,7 @@
     "^npm run (lint|build)$"
   ],
   "ask": [
+    "^git commit(?:\\s|$)",
     "^git push(?:\\s|$)",
     "^npm publish(?:\\s|$)"
   ],
