@@ -35,7 +35,9 @@ export interface ClassifierServerDependencies {
 
 export interface ClassifierServer {
 	ensureReady(signal?: AbortSignal): Promise<string>;
+	getAddress(): string | undefined;
 	getModel(): ClassifierModel;
+	onAddressChange(listener: (address: string | undefined) => void): void;
 	selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void>;
 	stop(): Promise<void>;
 }
@@ -172,6 +174,7 @@ export function registerClassifierServer(
 	const saveModel = dependencies.saveModel ?? saveClassifierModelPreference;
 
 	let active = false;
+	let address: string | undefined;
 	let sessionActive = false;
 	let generation = 0;
 	let endpoint: string | undefined;
@@ -182,6 +185,15 @@ export function registerClassifierServer(
 	let sessionContext: ExtensionContext | undefined;
 	let selectedModel = loadModel();
 	let startup: Promise<string> | undefined;
+	const addressListeners = new Set<(address: string | undefined) => void>();
+
+	function setEndpoint(value: string | undefined): void {
+		endpoint = value;
+		const nextAddress = value === undefined ? undefined : new URL(value).host;
+		if (nextAddress === address) return;
+		address = nextAddress;
+		for (const listener of addressListeners) listener(address);
+	}
 
 	function scheduleRestart(): void {
 		if (!sessionActive || !active || restartTimer) return;
@@ -229,7 +241,7 @@ export function registerClassifierServer(
 				ended = true;
 				if (ownedProcess === serverProcess) {
 					ownedProcess = undefined;
-					endpoint = undefined;
+					setEndpoint(undefined);
 				}
 				if (ready && active && currentGeneration === generation) scheduleRestart();
 				reject(error);
@@ -238,7 +250,7 @@ export function registerClassifierServer(
 				ended = true;
 				if (ownedProcess === serverProcess) {
 					ownedProcess = undefined;
-					endpoint = undefined;
+					setEndpoint(undefined);
 				}
 				if (active && currentGeneration === generation) scheduleRestart();
 				reject(
@@ -267,12 +279,12 @@ export function registerClassifierServer(
 
 			ready = true;
 			restartAttempts = 0;
-			endpoint = classifierEndpoint;
+			setEndpoint(classifierEndpoint);
 			return classifierEndpoint;
 		} catch (error) {
 			if (ownedProcess === serverProcess) {
 				ownedProcess = undefined;
-				endpoint = undefined;
+				setEndpoint(undefined);
 			}
 			await stopProcess(serverProcess);
 			if (!isAbortError(error) && active && currentGeneration === generation) scheduleRestart();
@@ -303,7 +315,7 @@ export function registerClassifierServer(
 		generation += 1;
 		sessionAbort?.abort();
 		sessionAbort = undefined;
-		endpoint = undefined;
+		setEndpoint(undefined);
 		startup = undefined;
 		restartAttempts = 0;
 		if (restartTimer) {
@@ -355,7 +367,11 @@ export function registerClassifierServer(
 
 	return {
 		ensureReady,
+		getAddress: () => address,
 		getModel: () => selectedModel,
+		onAddressChange: (listener) => {
+			addressListeners.add(listener);
+		},
 		selectModel,
 		stop,
 	};

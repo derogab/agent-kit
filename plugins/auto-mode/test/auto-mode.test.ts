@@ -38,7 +38,7 @@ test("the composition root connects the server, controls, and guard", async () =
 
 	assert.ok(toolCallHandler);
 	assert.equal(sessionStartHandlers, 2);
-	assert.equal(sessionShutdownHandlers, 1);
+	assert.equal(sessionShutdownHandlers, 2);
 	assert.ok(command);
 
 	let status: string | undefined;

@@ -129,6 +129,31 @@ test("session startup launches llama serve on the allocated port", async () => {
 	await harness.sessionShutdown();
 });
 
+test("the server address is published while running and cleared on stop", async () => {
+	const child = new FakeProcess();
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => 49_166,
+		spawnServer: () => child as unknown as ChildProcess,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+	const addresses: Array<string | undefined> = [];
+	harness.classifierServer.onAddressChange((address) => addresses.push(address));
+
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	assert.equal(harness.classifierServer.getAddress(), "127.0.0.1:49166");
+	assert.deepEqual(addresses, ["127.0.0.1:49166"]);
+
+	await harness.sessionShutdown();
+
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+	assert.deepEqual(addresses, ["127.0.0.1:49166", undefined]);
+});
+
 test("a missing model is downloaded before the server starts", async () => {
 	const child = new FakeProcess();
 	let downloadSignal: AbortSignal | undefined;

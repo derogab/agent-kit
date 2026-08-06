@@ -22,21 +22,26 @@ function createHarness(
 	overrides: Partial<ClassifierServer> = {},
 ) {
 	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
+	let address: string | undefined;
+	let addressListener: ((address: string | undefined) => void) | undefined;
 	const classifierServer: ClassifierServer = {
 		ensureReady: async () => "http://127.0.0.1:49152/v1/chat/completions",
+		getAddress: () => address,
 		getModel: () => selectedModel,
+		onAddressChange: (listener) => {
+			addressListener = listener;
+		},
 		selectModel: async (model) => {
 			selectedModel = model;
 		},
 		stop: async () => {},
 		...overrides,
 	};
-	let sessionStartHandler: ((event: any, context: any) => Promise<any>) | undefined;
+	const handlers = new Map<string, (event: any, context: any) => Promise<any>>();
 	let command: RegisteredCommand | undefined;
 	const controller = registerAutoModeControls({
-		on(event: string, callback: typeof sessionStartHandler) {
-			assert.equal(event, "session_start");
-			sessionStartHandler = callback;
+		on(event: string, callback: (event: any, context: any) => Promise<any>) {
+			handlers.set(event, callback);
 		},
 		registerCommand(name: string, options: RegisteredCommand) {
 			assert.equal(name, "auto-mode");
@@ -44,9 +49,19 @@ function createHarness(
 		},
 	} as never, classifierServer);
 
+	const sessionStartHandler = handlers.get("session_start");
 	assert.ok(sessionStartHandler);
+	assert.ok(handlers.get("session_shutdown"));
 	assert.ok(command);
-	return { command, controller, sessionStartHandler };
+	return {
+		command,
+		controller,
+		sessionStartHandler,
+		setAddress(value: string | undefined) {
+			address = value;
+			addressListener?.(value);
+		},
+	};
 }
 
 interface CommandContextOptions {
@@ -93,13 +108,36 @@ function createCommandContext(options: CommandContextOptions = {}) {
 	};
 }
 
-test("the status line shows when auto-mode is active", async () => {
+test("the status line shows the selected model when auto-mode is active", async () => {
 	const { sessionStartHandler } = createHarness();
 	const ui = createCommandContext();
 
 	await sessionStartHandler({}, ui.context);
 
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
+});
+
+test("the status line follows the classifier server address", async () => {
+	const { sessionStartHandler, setAddress } = createHarness();
+	const ui = createCommandContext();
+
+	await sessionStartHandler({}, ui.context);
+	setAddress("127.0.0.1:49152");
+
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· 127.0.0.1:49152 · inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
+
+	setAddress(undefined);
+
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
 });
 
 test("/auto-mode opens its main menu", async () => {
@@ -138,6 +176,10 @@ test("Model shows the default and changes the selected model", async () => {
 	assert.equal(ui.menus[3].title, "Classifier model: 4B");
 	assert.equal(selectedModel?.size, "4B");
 	assert.equal(receivedSignal, abortController.signal);
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
+	});
 	assert.deepEqual(ui.notifications, [{
 		message: "Classifier model set to 4B.",
 		type: "info",
@@ -179,7 +221,10 @@ test("disabling stops and enabling restarts the classifier server", async () => 
 	assert.equal(stopCount, 1);
 	assert.equal(ensureCount, 1);
 	assert.equal(controller.isActive(), true);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
@@ -201,7 +246,10 @@ test("enabling forwards cancellation while waiting for the classifier server", a
 
 	assert.equal(receivedSignal, abortController.signal);
 	assert.equal(controller.isActive(), true);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
 
@@ -216,7 +264,10 @@ test("enabling stays active when classifier setup fails", async () => {
 	await command.handler("", ui.context);
 
 	assert.equal(controller.isActive(), true);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode" });
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+	});
 	assert.deepEqual(ui.notifications.at(-1), {
 		message: "Auto-mode could not start: server failed",
 		type: "error",
