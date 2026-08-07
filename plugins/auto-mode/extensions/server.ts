@@ -6,11 +6,17 @@ import {
 	downloadClassifierModel,
 	findCachedClassifierModel,
 	type ClassifierModel,
+	type ClassifierModelSize,
 } from "./model.ts";
 import {
 	loadClassifierModelPreference,
 	saveClassifierModelPreference,
 } from "./preferences.ts";
+import {
+	isProcessAlive as defaultIsProcessAlive,
+	joinServerRegistry,
+	leaveServerRegistry,
+} from "./registry.ts";
 
 const CLASSIFIER_HOST = "127.0.0.1";
 const HEALTH_CHECK_INTERVAL_MS = 250;
@@ -27,7 +33,10 @@ export interface ClassifierServerDependencies {
 	findFreePort?: typeof findFreePort;
 	healthCheckIntervalMs?: number;
 	healthCheckTimeoutMs?: number;
+	isProcessAlive?: (pid: number) => boolean;
+	killProcess?: (pid: number, signal: NodeJS.Signals) => void;
 	loadModel?: typeof loadClassifierModelPreference;
+	registryDirectory?: string;
 	restartDelayMs?: number;
 	saveModel?: typeof saveClassifierModelPreference;
 	spawnServer?: SpawnServer;
@@ -117,12 +126,16 @@ export async function findFreePort(): Promise<number> {
 }
 
 function spawnClassifierServer(command: string, args: readonly string[]): ChildProcess {
-	return spawn(command, [...args], { stdio: "ignore" });
+	// Detached: other Pi instances may share this server, so it must survive this
+	// instance's exit and stay out of its process group when the user hits Ctrl+C.
+	const serverProcess = spawn(command, [...args], { detached: true, stdio: "ignore" });
+	serverProcess.unref();
+	return serverProcess;
 }
 
 async function waitUntilHealthy(
 	healthEndpoint: string,
-	serverProcess: ChildProcess,
+	isRunning: () => boolean,
 	fetchHealth: typeof fetch,
 	signal: AbortSignal,
 	intervalMs = HEALTH_CHECK_INTERVAL_MS,
@@ -130,8 +143,8 @@ async function waitUntilHealthy(
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	do {
-		if (serverProcess.exitCode !== null) {
-			throw new Error(`llama serve exited with code ${serverProcess.exitCode}`);
+		if (!isRunning()) {
+			throw new Error("llama serve exited before it became ready");
 		}
 		try {
 			if ((await fetchHealth(healthEndpoint, { signal })).ok) return;
@@ -153,6 +166,31 @@ async function stopProcess(serverProcess: ChildProcess): Promise<void> {
 	if (serverProcess.exitCode === null) serverProcess.kill("SIGKILL");
 }
 
+/** Stop a shared server another Pi instance spawned, so only its pid is known. */
+async function stopProcessById(
+	pid: number,
+	isAlive: (pid: number) => boolean,
+	kill: (pid: number, signal: NodeJS.Signals) => void,
+): Promise<void> {
+	try {
+		kill(pid, "SIGTERM");
+	} catch {
+		return; // Already gone.
+	}
+	const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+	while (isAlive(pid)) {
+		if (Date.now() >= deadline) {
+			try {
+				kill(pid, "SIGKILL");
+			} catch {
+				// Exited between the liveness check and the signal.
+			}
+			return;
+		}
+		await sleep(HEALTH_CHECK_INTERVAL_MS);
+	}
+}
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -168,9 +206,19 @@ export function registerClassifierServer(
 	const healthCheckIntervalMs =
 		dependencies.healthCheckIntervalMs ?? HEALTH_CHECK_INTERVAL_MS;
 	const healthCheckTimeoutMs = dependencies.healthCheckTimeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
+	const isAlive = dependencies.isProcessAlive ?? defaultIsProcessAlive;
+	const killProcess =
+		dependencies.killProcess ??
+		((pid: number, killSignal: NodeJS.Signals) => {
+			process.kill(pid, killSignal);
+		});
 	const loadModel = dependencies.loadModel ?? loadClassifierModelPreference;
 	const launchServer = dependencies.spawnServer ?? spawnClassifierServer;
 	const firstRestartDelay = dependencies.restartDelayMs ?? 1_000;
+	const registryDependencies = {
+		directory: dependencies.registryDirectory,
+		isProcessAlive: isAlive,
+	};
 	const saveModel = dependencies.saveModel ?? saveClassifierModelPreference;
 
 	let active = false;
@@ -178,6 +226,7 @@ export function registerClassifierServer(
 	let sessionActive = false;
 	let generation = 0;
 	let endpoint: string | undefined;
+	let joined: { pid: number; size: ClassifierModelSize } | undefined;
 	let ownedProcess: ChildProcess | undefined;
 	let restartAttempts = 0;
 	let restartTimer: NodeJS.Timeout | undefined;
@@ -223,76 +272,105 @@ export function registerClassifierServer(
 		}
 		if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 
-		const port = await getFreePort();
-		if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
-
-		const serverProcess = launchServer("llama", [
-			"serve",
-			"--host",
-			CLASSIFIER_HOST,
-			"--port",
-			String(port),
-			"--model",
-			modelPath,
-			"--alias",
-			CLASSIFIER_ALIAS,
-		]);
-		ownedProcess = serverProcess;
-		const classifierEndpoint = `http://${CLASSIFIER_HOST}:${port}/v1/chat/completions`;
 		let ready = false;
 		let ended = false;
+		let serverProcess: ChildProcess | undefined;
+		let startupFailure: Promise<never> | undefined;
 
-		const startupFailure = new Promise<never>((_resolve, reject) => {
-			serverProcess.once("error", (error) => {
-				ended = true;
-				if (ownedProcess === serverProcess) {
-					ownedProcess = undefined;
-					setEndpoint(undefined);
-				}
-				if (ready && active && currentGeneration === generation) scheduleRestart();
-				reject(error);
-			});
-			serverProcess.once("exit", (code, exitSignal) => {
-				ended = true;
-				if (ownedProcess === serverProcess) {
-					ownedProcess = undefined;
-					setEndpoint(undefined);
-				}
-				if (active && currentGeneration === generation) scheduleRestart();
-				reject(
-					new Error(
-						`llama serve exited${code === null ? "" : ` with code ${code}`}${
-							exitSignal ? ` (${exitSignal})` : ""
-						}`,
-					),
-				);
-			});
-		});
+		// Attach to a server another Pi instance already runs for this model, or spawn one.
+		const server = await joinServerRegistry(
+			model.size,
+			async () => {
+				const port = await getFreePort();
+				const child = launchServer("llama", [
+					"serve",
+					"--host",
+					CLASSIFIER_HOST,
+					"--port",
+					String(port),
+					"--model",
+					modelPath,
+					"--alias",
+					CLASSIFIER_ALIAS,
+				]);
+				serverProcess = child;
+				ownedProcess = child;
+				startupFailure = new Promise<never>((_resolve, reject) => {
+					child.once("error", (error) => {
+						ended = true;
+						if (ownedProcess === child) {
+							ownedProcess = undefined;
+							setEndpoint(undefined);
+						}
+						if (ready && active && currentGeneration === generation) scheduleRestart();
+						reject(error);
+					});
+					child.once("exit", (code, exitSignal) => {
+						ended = true;
+						if (ownedProcess === child) {
+							ownedProcess = undefined;
+							setEndpoint(undefined);
+						}
+						if (active && currentGeneration === generation) scheduleRestart();
+						reject(
+							new Error(
+								`llama serve exited${code === null ? "" : ` with code ${code}`}${
+									exitSignal ? ` (${exitSignal})` : ""
+								}`,
+							),
+						);
+					});
+				});
+				// The failure may fire before the race below consumes it, e.g. when this
+				// startup attempt is aborted first; never leave the rejection unhandled.
+				startupFailure.catch(() => {});
+				return { pid: child.pid, port };
+			},
+			registryDependencies,
+		);
+		const membership =
+			server.pid === undefined ? undefined : { pid: server.pid, size: model.size };
+		const classifierEndpoint = `http://${CLASSIFIER_HOST}:${server.port}/v1/chat/completions`;
+		const healthEndpoint = `http://${CLASSIFIER_HOST}:${server.port}/health`;
 
 		try {
-			await Promise.race([
-				waitUntilHealthy(
-					`http://${CLASSIFIER_HOST}:${port}/health`,
-					serverProcess,
-					fetchHealth,
-					signal,
-					healthCheckIntervalMs,
-					healthCheckTimeoutMs,
-				),
-				startupFailure,
-			]);
+			if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
+
+			const child = serverProcess;
+			const isRunning = child
+				? () => child.exitCode === null
+				: () => isAlive(server.pid as number);
+			const healthy = waitUntilHealthy(
+				healthEndpoint,
+				isRunning,
+				fetchHealth,
+				signal,
+				healthCheckIntervalMs,
+				healthCheckTimeoutMs,
+			);
+			await (startupFailure ? Promise.race([healthy, startupFailure]) : healthy);
 			if (ended || !active || currentGeneration !== generation || signal.aborted) throw abortError();
 
 			ready = true;
 			restartAttempts = 0;
+			joined = membership;
 			setEndpoint(classifierEndpoint);
 			return classifierEndpoint;
 		} catch (error) {
-			if (ownedProcess === serverProcess) {
+			if (serverProcess && ownedProcess === serverProcess) {
 				ownedProcess = undefined;
 				setEndpoint(undefined);
 			}
-			await stopProcess(serverProcess);
+			if (membership) {
+				try {
+					await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
+				} catch {
+					// Best effort: a stale entry is corrected by the next join.
+				}
+			}
+			// Only ever signal a process this instance spawned itself. A failed attach may
+			// mean the registry entry was stale and its pid now belongs to something else.
+			if (serverProcess) await stopProcess(serverProcess);
 			if (!isAbortError(error) && active && currentGeneration === generation) scheduleRestart();
 			throw error;
 		}
@@ -316,6 +394,27 @@ export function registerClassifierServer(
 		return promise;
 	}
 
+	/**
+	 * Leave the shared server's registry entry and stop the server only when no other
+	 * live Pi instance still uses it.
+	 */
+	async function releaseServer(
+		membership: { pid: number; size: ClassifierModelSize },
+		serverProcess: ChildProcess | undefined,
+	): Promise<void> {
+		let lastUser: boolean;
+		try {
+			lastUser = await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
+		} catch {
+			// Without the registry there is no way to tell who else uses the server;
+			// only stop a process this instance spawned itself.
+			lastUser = serverProcess !== undefined;
+		}
+		if (!lastUser) return;
+		if (serverProcess) await stopProcess(serverProcess);
+		else await stopProcessById(membership.pid, isAlive, killProcess);
+	}
+
 	async function stop(): Promise<void> {
 		active = false;
 		generation += 1;
@@ -330,8 +429,22 @@ export function registerClassifierServer(
 		}
 
 		const serverProcess = ownedProcess;
+		const membership = joined;
 		ownedProcess = undefined;
-		if (serverProcess) await stopProcess(serverProcess);
+		joined = undefined;
+		if (membership) await releaseServer(membership, serverProcess);
+		else if (serverProcess) await stopProcess(serverProcess);
+	}
+
+	/**
+	 * A shared server owned by another instance dies without any child-process event
+	 * here, so probe its pid and let the next start rediscover or respawn it.
+	 */
+	function dropVanishedSharedServer(): void {
+		if (!joined || ownedProcess || !endpoint) return;
+		if (isAlive(joined.pid)) return;
+		joined = undefined;
+		setEndpoint(undefined);
 	}
 
 	function ensureReady(signal?: AbortSignal): Promise<string> {
@@ -341,6 +454,7 @@ export function registerClassifierServer(
 			generation += 1;
 			sessionAbort = new AbortController();
 		}
+		dropVanishedSharedServer();
 		return withSignal(start(), signal);
 	}
 
