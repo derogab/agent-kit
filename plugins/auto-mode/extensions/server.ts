@@ -16,6 +16,7 @@ import {
 	isProcessAlive as defaultIsProcessAlive,
 	joinServerRegistry,
 	leaveServerRegistry,
+	type LeaveResult,
 } from "./registry.ts";
 
 const CLASSIFIER_HOST = "127.0.0.1";
@@ -226,7 +227,7 @@ export function registerClassifierServer(
 	let sessionActive = false;
 	let generation = 0;
 	let endpoint: string | undefined;
-	let joined: { pid: number; size: ClassifierModelSize } | undefined;
+	let joined: { pid: number; port: number; size: ClassifierModelSize } | undefined;
 	let ownedProcess: ChildProcess | undefined;
 	let restartAttempts = 0;
 	let restartTimer: NodeJS.Timeout | undefined;
@@ -276,64 +277,69 @@ export function registerClassifierServer(
 		let ended = false;
 		let serverProcess: ChildProcess | undefined;
 		let startupFailure: Promise<never> | undefined;
-
-		// Attach to a server another Pi instance already runs for this model, or spawn one.
-		const server = await joinServerRegistry(
-			model.size,
-			async () => {
-				const port = await getFreePort();
-				const child = launchServer("llama", [
-					"serve",
-					"--host",
-					CLASSIFIER_HOST,
-					"--port",
-					String(port),
-					"--model",
-					modelPath,
-					"--alias",
-					CLASSIFIER_ALIAS,
-				]);
-				serverProcess = child;
-				ownedProcess = child;
-				startupFailure = new Promise<never>((_resolve, reject) => {
-					child.once("error", (error) => {
-						ended = true;
-						if (ownedProcess === child) {
-							ownedProcess = undefined;
-							setEndpoint(undefined);
-						}
-						if (ready && active && currentGeneration === generation) scheduleRestart();
-						reject(error);
-					});
-					child.once("exit", (code, exitSignal) => {
-						ended = true;
-						if (ownedProcess === child) {
-							ownedProcess = undefined;
-							setEndpoint(undefined);
-						}
-						if (active && currentGeneration === generation) scheduleRestart();
-						reject(
-							new Error(
-								`llama serve exited${code === null ? "" : ` with code ${code}`}${
-									exitSignal ? ` (${exitSignal})` : ""
-								}`,
-							),
-						);
-					});
-				});
-				// The failure may fire before the race below consumes it, e.g. when this
-				// startup attempt is aborted first; never leave the rejection unhandled.
-				startupFailure.catch(() => {});
-				return { pid: child.pid, port };
-			},
-			registryDependencies,
-		);
-		const membership =
-			server.pid === undefined ? undefined : { pid: server.pid, size: model.size };
-		const classifierEndpoint = `http://${CLASSIFIER_HOST}:${server.port}/v1/chat/completions`;
-		const healthEndpoint = `http://${CLASSIFIER_HOST}:${server.port}/health`;
+		let membership: { pid: number; port: number; size: ClassifierModelSize } | undefined;
 
 		try {
+			// Attach to a server another Pi instance already runs for this model, or spawn one.
+			const server = await joinServerRegistry(
+				model.size,
+				async () => {
+					const port = await getFreePort();
+					const child = launchServer("llama", [
+						"serve",
+						"--host",
+						CLASSIFIER_HOST,
+						"--port",
+						String(port),
+						"--model",
+						modelPath,
+						"--alias",
+						CLASSIFIER_ALIAS,
+					]);
+					serverProcess = child;
+					ownedProcess = child;
+					startupFailure = new Promise<never>((_resolve, reject) => {
+						child.once("error", (error) => {
+							ended = true;
+							if (ownedProcess === child) {
+								ownedProcess = undefined;
+								setEndpoint(undefined);
+							}
+							if (ready && active && currentGeneration === generation) scheduleRestart();
+							reject(error);
+						});
+						child.once("exit", (code, exitSignal) => {
+							ended = true;
+							if (ownedProcess === child) {
+								ownedProcess = undefined;
+								setEndpoint(undefined);
+							}
+							if (active && currentGeneration === generation) scheduleRestart();
+							reject(
+								new Error(
+									`llama serve exited${code === null ? "" : ` with code ${code}`}${
+										exitSignal ? ` (${exitSignal})` : ""
+									}`,
+								),
+							);
+						});
+					});
+					// The failure may fire before the race below consumes it, e.g. when this
+					// startup attempt is aborted first; never leave the rejection unhandled.
+					startupFailure.catch(() => {});
+					return { pid: child.pid, port };
+				},
+				registryDependencies,
+			);
+			if (server.pid !== undefined) {
+				membership = { pid: server.pid, port: server.port, size: model.size };
+				// Publish membership before the health wait so a concurrent stop() releases
+				// this attempt through the registry refcount instead of unconditionally
+				// killing a server that another instance may have joined in the meantime.
+				joined = membership;
+			}
+			const classifierEndpoint = `http://${CLASSIFIER_HOST}:${server.port}/v1/chat/completions`;
+
 			if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 
 			const child = serverProcess;
@@ -341,7 +347,7 @@ export function registerClassifierServer(
 				? () => child.exitCode === null
 				: () => isAlive(server.pid as number);
 			const healthy = waitUntilHealthy(
-				healthEndpoint,
+				`http://${CLASSIFIER_HOST}:${server.port}/health`,
 				isRunning,
 				fetchHealth,
 				signal,
@@ -353,7 +359,6 @@ export function registerClassifierServer(
 
 			ready = true;
 			restartAttempts = 0;
-			joined = membership;
 			setEndpoint(classifierEndpoint);
 			return classifierEndpoint;
 		} catch (error) {
@@ -361,16 +366,29 @@ export function registerClassifierServer(
 				ownedProcess = undefined;
 				setEndpoint(undefined);
 			}
-			if (membership) {
-				try {
-					await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
-				} catch {
-					// Best effort: a stale entry is corrected by the next join.
+			if (membership && joined === membership) {
+				// This attempt still owns its registration. When a concurrent stop() has
+				// already taken and released it, releasing again could strip an instance
+				// that re-registered in between.
+				joined = undefined;
+				if (isAbortError(error)) {
+					// Aborted, not broken: another instance may share this server, so
+					// release it through the registry refcount.
+					await releaseServer(membership, serverProcess);
+				} else {
+					try {
+						await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
+					} catch {
+						// Best effort: a stale entry is corrected by the next join.
+					}
+					// A server that failed to start must not linger, but only ever signal a
+					// process this instance spawned itself: after a failed attach the entry
+					// may have been stale, with a pid that now belongs to something else.
+					if (serverProcess) await stopProcess(serverProcess);
 				}
+			} else if (!membership && serverProcess) {
+				await stopProcess(serverProcess);
 			}
-			// Only ever signal a process this instance spawned itself. A failed attach may
-			// mean the registry entry was stale and its pid now belongs to something else.
-			if (serverProcess) await stopProcess(serverProcess);
 			if (!isAbortError(error) && active && currentGeneration === generation) scheduleRestart();
 			throw error;
 		}
@@ -399,20 +417,41 @@ export function registerClassifierServer(
 	 * live Pi instance still uses it.
 	 */
 	async function releaseServer(
-		membership: { pid: number; size: ClassifierModelSize },
+		membership: { pid: number; port: number; size: ClassifierModelSize },
 		serverProcess: ChildProcess | undefined,
 	): Promise<void> {
-		let lastUser: boolean;
+		let outcome: LeaveResult;
 		try {
-			lastUser = await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
+			outcome = await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
 		} catch {
 			// Without the registry there is no way to tell who else uses the server;
 			// only stop a process this instance spawned itself.
-			lastUser = serverProcess !== undefined;
+			outcome = serverProcess ? "unregistered" : "kept";
 		}
-		if (!lastUser) return;
-		if (serverProcess) await stopProcess(serverProcess);
-		else await stopProcessById(membership.pid, isAlive, killProcess);
+		if (outcome === "kept") return;
+		// A process this instance spawned itself is always safe to signal.
+		if (serverProcess) {
+			await stopProcess(serverProcess);
+			return;
+		}
+		// A server known only by pid needs care: pids get recycled, and an "unregistered"
+		// entry has already moved on. Even when this instance removed the final reference,
+		// confirm the recorded port still answers so a recycled pid never gets the signal.
+		if (outcome !== "removed") return;
+		if (!(await isServerResponding(membership.port))) return;
+		await stopProcessById(membership.pid, isAlive, killProcess);
+	}
+
+	/** Whether anything still answers on the shared server's recorded port. */
+	async function isServerResponding(port: number): Promise<boolean> {
+		try {
+			await fetchHealth(`http://${CLASSIFIER_HOST}:${port}/health`, {
+				signal: AbortSignal.timeout(1_000),
+			});
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	async function stop(): Promise<void> {

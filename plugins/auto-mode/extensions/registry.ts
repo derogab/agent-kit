@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ClassifierModelSize } from "./model.ts";
@@ -61,7 +61,11 @@ function readEntry(path: string): RegistryEntry | undefined {
 }
 
 function writeEntry(path: string, entry: RegistryEntry): void {
-	writeFileSync(path, `${JSON.stringify(entry, null, 2)}\n`, "utf8");
+	// Write-then-rename so a process dying mid-write cannot leave a truncated entry
+	// behind; the previous valid entry survives instead.
+	const temporaryPath = `${path}.tmp`;
+	writeFileSync(temporaryPath, `${JSON.stringify(entry, null, 2)}\n`, "utf8");
+	renameSync(temporaryPath, path);
 }
 
 interface LockOptions {
@@ -86,21 +90,25 @@ async function withLock<T>(path: string, options: LockOptions, fn: () => Promise
 		try {
 			writeFileSync(lockPath, "", { flag: "wx" });
 			break;
-		} catch {
-			try {
-				if (statSync(lockPath).mtimeMs < Date.now() - options.staleMs) {
-					rmSync(lockPath, { force: true });
-					continue;
-				}
-			} catch {
-				// The lock vanished between attempts; retry immediately.
-				continue;
-			}
-			if (Date.now() >= deadline) {
-				throw new Error("timed out waiting for the auto-mode server registry lock");
-			}
-			await new Promise((resolve) => setTimeout(resolve, options.retryMs));
+		} catch (error) {
+			// Anything but "the lock already exists" (missing directory, permissions)
+			// will not resolve by waiting; surface it instead of spinning forever.
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 		}
+		let stale = false;
+		try {
+			stale = statSync(lockPath).mtimeMs < Date.now() - options.staleMs;
+		} catch {
+			// The lock vanished between attempts; fall through to the bounded retry.
+		}
+		if (stale) {
+			rmSync(lockPath, { force: true });
+			continue;
+		}
+		if (Date.now() >= deadline) {
+			throw new Error("timed out waiting for the auto-mode server registry lock");
+		}
+		await new Promise((resolve) => setTimeout(resolve, options.retryMs));
 	}
 	try {
 		return await fn();
@@ -143,30 +151,34 @@ export async function joinServerRegistry(
 }
 
 /**
- * Drop this instance from the server's registry entry.
- *
- * Returns true when no other live instance still uses `serverPid`, meaning the caller
- * is responsible for stopping the server process.
+ * How a departing instance left the registry:
+ * - "kept": other live users remain, so the server must keep running.
+ * - "removed": the caller removed the final reference and must stop the server.
+ * - "unregistered": the entry was missing or already replaced; nothing references
+ *   serverPid anymore, but it was never this caller's entry to stop.
  */
+export type LeaveResult = "kept" | "removed" | "unregistered";
+
+/** Drop this instance from the server's registry entry. */
 export async function leaveServerRegistry(
 	size: ClassifierModelSize,
 	serverPid: number,
 	dependencies: ServerRegistryDependencies = {},
-): Promise<boolean> {
+): Promise<LeaveResult> {
 	const directory = dependencies.directory ?? getAgentDir();
 	const alive = dependencies.isProcessAlive ?? isProcessAlive;
 	const selfPid = dependencies.selfPid ?? process.pid;
+	mkdirSync(directory, { recursive: true });
 	const path = registryPath(directory, size);
-	return withLock(path, lockOptions(dependencies), () => {
+	return withLock<LeaveResult>(path, lockOptions(dependencies), () => {
 		const entry = readEntry(path);
-		// A missing or replaced entry means no one else references serverPid anymore.
-		if (!entry || entry.pid !== serverPid) return true;
+		if (!entry || entry.pid !== serverPid) return "unregistered";
 		const users = entry.users.filter((user) => user !== selfPid && alive(user));
 		if (users.length === 0) {
 			rmSync(path, { force: true });
-			return true;
+			return "removed";
 		}
 		writeEntry(path, { ...entry, users });
-		return false;
+		return "kept";
 	});
 }

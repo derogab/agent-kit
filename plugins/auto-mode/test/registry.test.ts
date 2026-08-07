@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { joinServerRegistry, leaveServerRegistry } from "../extensions/registry.ts";
 
+const tempDirs: string[] = [];
+
+after(() => {
+	for (const directory of tempDirs) rmSync(directory, { force: true, recursive: true });
+});
+
 function tempDir(): string {
-	return mkdtempSync(join(tmpdir(), "auto-mode-registry-"));
+	const directory = mkdtempSync(join(tmpdir(), "auto-mode-registry-"));
+	tempDirs.push(directory);
+	return directory;
 }
 
 function entryPath(directory: string): string {
@@ -80,13 +88,13 @@ test("leaving keeps the server for remaining live users", async () => {
 	const directory = tempDir();
 	writeFileSync(entryPath(directory), JSON.stringify({ pid: 111, port: 49_200, users: [42, 43] }));
 
-	const lastUser = await leaveServerRegistry("0.8B", 111, {
+	const outcome = await leaveServerRegistry("0.8B", 111, {
 		directory,
 		isProcessAlive: (pid) => pid === 111 || pid === 43,
 		selfPid: 42,
 	});
 
-	assert.equal(lastUser, false);
+	assert.equal(outcome, "kept");
 	assert.deepEqual(readEntry(directory), { pid: 111, port: 49_200, users: [43] });
 });
 
@@ -94,28 +102,40 @@ test("the last live user removes the entry and stops the server", async () => {
 	const directory = tempDir();
 	writeFileSync(entryPath(directory), JSON.stringify({ pid: 111, port: 49_200, users: [42, 43] }));
 
-	const lastUser = await leaveServerRegistry("0.8B", 111, {
+	const outcome = await leaveServerRegistry("0.8B", 111, {
 		directory,
 		isProcessAlive: (pid) => pid === 111 || pid === 42,
 		selfPid: 42,
 	});
 
-	assert.equal(lastUser, true);
+	assert.equal(outcome, "removed");
 	assert.equal(existsSync(entryPath(directory)), false);
 });
 
-test("leaving a replaced entry reports the old server unused without touching it", async () => {
+test("leaving a replaced entry reports it unregistered without touching it", async () => {
 	const directory = tempDir();
 	writeFileSync(entryPath(directory), JSON.stringify({ pid: 222, port: 49_300, users: [43] }));
 
-	const lastUser = await leaveServerRegistry("0.8B", 111, {
+	const outcome = await leaveServerRegistry("0.8B", 111, {
 		directory,
 		isProcessAlive: () => true,
 		selfPid: 42,
 	});
 
-	assert.equal(lastUser, true);
+	assert.equal(outcome, "unregistered");
 	assert.deepEqual(readEntry(directory), { pid: 222, port: 49_300, users: [43] });
+});
+
+test("leaving with a missing registry directory reports unregistered instead of spinning", async () => {
+	const directory = join(tempDir(), "missing");
+
+	const outcome = await leaveServerRegistry("0.8B", 111, {
+		directory,
+		isProcessAlive: () => true,
+		selfPid: 42,
+	});
+
+	assert.equal(outcome, "unregistered");
 });
 
 test("a stale lock left by a crashed process is broken", async () => {

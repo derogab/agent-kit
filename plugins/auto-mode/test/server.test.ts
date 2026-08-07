@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import {
 	findFreePort,
 	registerClassifierServer,
@@ -35,13 +35,24 @@ class FakeProcess extends EventEmitter {
 	}
 }
 
+const tempRegistryDirs: string[] = [];
+
+after(() => {
+	for (const directory of tempRegistryDirs) rmSync(directory, { force: true, recursive: true });
+});
+
+function tempRegistryDir(): string {
+	const directory = mkdtempSync(join(tmpdir(), "auto-mode-registry-"));
+	tempRegistryDirs.push(directory);
+	return directory;
+}
+
 function createHarness(dependencies: ClassifierServerDependencies) {
 	let sessionStart: ((event: any, context: any) => void) | undefined;
 	let sessionShutdown: (() => Promise<void>) | undefined;
 	const notifications: Array<{ message: string; type?: string }> = [];
 	const killedPids: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-	const registryDirectory =
-		dependencies.registryDirectory ?? mkdtempSync(join(tmpdir(), "auto-mode-registry-"));
+	const registryDirectory = dependencies.registryDirectory ?? tempRegistryDir();
 	const classifierServer = registerClassifierServer({
 		on(event: string, handler: any) {
 			if (event === "session_start") sessionStart = handler;
@@ -364,7 +375,7 @@ test("a failed model switch still reports the new model without an address", asy
 });
 
 function seedRegistry(entry: { pid: number; port: number; users: number[] }): string {
-	const registryDirectory = mkdtempSync(join(tmpdir(), "auto-mode-registry-"));
+	const registryDirectory = tempRegistryDir();
 	writeFileSync(
 		join(registryDirectory, "auto-mode-server-0.8B.json"),
 		JSON.stringify(entry),
@@ -493,6 +504,90 @@ test("a vanished shared server is replaced on the next readiness check", async (
 
 	await harness.sessionShutdown();
 	assert.deepEqual(child.signals, ["SIGTERM"]);
+});
+
+test("stopping during warm-up leaves the server for an instance that joined meanwhile", async () => {
+	const child = new FakeProcess();
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => 49_185,
+		isProcessAlive: (pid) => pid === 7001,
+		spawnServer: () => child as unknown as ChildProcess,
+		// Health never resolves: the server stays in warm-up for the whole test.
+		fetch: (async () => new Promise<Response>(() => {})) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	const pending = harness.classifierServer.ensureReady();
+	pending.catch(() => {});
+
+	const registryPath = join(harness.registryDirectory, "auto-mode-server-0.8B.json");
+	for (let attempt = 0; !existsSync(registryPath); attempt += 1) {
+		assert.ok(attempt < 1_000, "registry entry was never written");
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	const entry = JSON.parse(readFileSync(registryPath, "utf8"));
+	writeFileSync(registryPath, JSON.stringify({ ...entry, users: [...entry.users, 7001] }));
+
+	await harness.classifierServer.stop();
+
+	assert.deepEqual(child.signals, []);
+	assert.deepEqual(harness.killedPids, []);
+	assert.deepEqual(readRegistryUsers(harness.registryDirectory), [7001]);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(child.signals, []);
+});
+
+test("shutdown never signals a pid whose registry entry was replaced", async () => {
+	const registryDirectory = seedRegistry({ pid: 7042, port: 49_186, users: [7001] });
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		isProcessAlive: () => true,
+		registryDirectory,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	// Another instance replaced the entry, e.g. after this server died and its pid
+	// could have been recycled by an unrelated process.
+	const registryPath = join(registryDirectory, "auto-mode-server-0.8B.json");
+	writeFileSync(registryPath, JSON.stringify({ pid: 8055, port: 49_187, users: [8001] }));
+
+	await harness.sessionShutdown();
+
+	assert.deepEqual(harness.killedPids, []);
+	assert.deepEqual(JSON.parse(readFileSync(registryPath, "utf8")), {
+		pid: 8055,
+		port: 49_187,
+		users: [8001],
+	});
+});
+
+test("shutdown does not signal the shared server pid when its port no longer answers", async () => {
+	const registryDirectory = seedRegistry({ pid: 7042, port: 49_188, users: [] });
+	let serverUp = true;
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		isProcessAlive: (pid) => pid === 7042,
+		registryDirectory,
+		fetch: (async () => {
+			if (serverUp) return healthyResponse();
+			throw new TypeError("fetch failed");
+		}) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	// The server dies but its pid reads as alive again, as a recycled pid would.
+	serverUp = false;
+	await harness.sessionShutdown();
+
+	assert.deepEqual(harness.killedPids, []);
+	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
 });
 
 test("a throwing address listener does not break the server lifecycle", async () => {
