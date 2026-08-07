@@ -17,14 +17,35 @@ export function registerAutoModeControls(
 	classifierServer: ClassifierServer,
 ): AutoModeController {
 	let active = true;
+	let sessionContext: ExtensionContext | undefined;
 
 	function updateStatus(ctx: ExtensionContext, enabled: boolean) {
 		active = enabled;
-		ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("success", "auto-mode") : undefined);
+		if (!enabled) {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			return;
+		}
+		const model = classifierServer.getModel();
+		const details = [classifierServer.getAddress(), `${model.repository}:${model.size}`]
+			.filter((detail): detail is string => detail !== undefined)
+			.join(" · ");
+		ctx.ui.setStatus(
+			STATUS_KEY,
+			`${ctx.ui.theme.fg("success", "auto-mode")} ${ctx.ui.theme.fg("muted", `· ${details}`)}`,
+		);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		sessionContext = ctx;
 		updateStatus(ctx, active);
+	});
+
+	pi.on("session_shutdown", () => {
+		sessionContext = undefined;
+	});
+
+	classifierServer.onAddressChange(() => {
+		if (sessionContext) updateStatus(sessionContext, active);
 	});
 
 	pi.registerCommand("auto-mode", {
@@ -50,6 +71,8 @@ export function registerAutoModeControls(
 						}`,
 						"error",
 					);
+				} finally {
+					updateStatus(ctx, active);
 				}
 				return;
 			}

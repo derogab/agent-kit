@@ -129,6 +129,36 @@ test("session startup launches llama serve on the allocated port", async () => {
 	await harness.sessionShutdown();
 });
 
+test("the server address is published while running and cleared on stop", async () => {
+	const child = new FakeProcess();
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => 49_166,
+		spawnServer: () => child as unknown as ChildProcess,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+	const addresses: Array<string | undefined> = [];
+	harness.classifierServer.onAddressChange((address) => addresses.push(address));
+	const ignored: Array<string | undefined> = [];
+	const unsubscribe = harness.classifierServer.onAddressChange((address) => ignored.push(address));
+
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	assert.equal(harness.classifierServer.getAddress(), "127.0.0.1:49166");
+	assert.deepEqual(addresses, ["127.0.0.1:49166"]);
+	assert.deepEqual(ignored, ["127.0.0.1:49166"]);
+
+	unsubscribe();
+	await harness.sessionShutdown();
+
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+	assert.deepEqual(addresses, ["127.0.0.1:49166", undefined]);
+	assert.deepEqual(ignored, ["127.0.0.1:49166"]);
+});
+
 test("a missing model is downloaded before the server starts", async () => {
 	const child = new FakeProcess();
 	let downloadSignal: AbortSignal | undefined;
@@ -237,6 +267,10 @@ test("selecting a model restarts an active server with that model", async () => 
 		},
 		fetch: (async () => healthyResponse()) as typeof fetch,
 	});
+	const addressEvents: Array<{ address: string | undefined; model: string }> = [];
+	harness.classifierServer.onAddressChange((address) => {
+		addressEvents.push({ address, model: harness.classifierServer.getModel().size });
+	});
 
 	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
 	await harness.classifierServer.ensureReady();
@@ -245,6 +279,11 @@ test("selecting a model restarts an active server with that model", async () => 
 	assert.ok(fourB);
 	await harness.classifierServer.selectModel(fourB);
 
+	assert.deepEqual(addressEvents, [
+		{ address: "127.0.0.1:49157", model: "0.8B" },
+		{ address: undefined, model: "4B" },
+		{ address: "127.0.0.1:49158", model: "4B" },
+	]);
 	assert.deepEqual(children[0].signals, ["SIGTERM"]);
 	assert.equal(harness.classifierServer.getModel(), fourB);
 	assert.equal(savedModel, fourB);
@@ -258,6 +297,73 @@ test("selecting a model restarts an active server with that model", async () => 
 
 	await harness.sessionShutdown();
 	assert.deepEqual(children[1].signals, ["SIGTERM"]);
+});
+
+test("a failed model switch still reports the new model without an address", async () => {
+	const children = [new FakeProcess(), new FakeProcess()];
+	const ports = [49_167, 49_168];
+	let spawnCount = 0;
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => ports.shift() ?? 49_169,
+		healthCheckIntervalMs: 0,
+		healthCheckTimeoutMs: 0,
+		spawnServer: () => {
+			const child = children[spawnCount];
+			spawnCount += 1;
+			return child as unknown as ChildProcess;
+		},
+		fetch: (async () =>
+			spawnCount === 1
+				? healthyResponse()
+				: new Response(null, { status: 503 })) as typeof fetch,
+	});
+	const addressEvents: Array<{ address: string | undefined; model: string }> = [];
+	harness.classifierServer.onAddressChange((address) => {
+		addressEvents.push({ address, model: harness.classifierServer.getModel().size });
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+
+	const fourB = CLASSIFIER_MODELS.find((model) => model.size === "4B");
+	assert.ok(fourB);
+	await assert.rejects(
+		harness.classifierServer.selectModel(fourB),
+		/llama serve did not become ready in time/,
+	);
+
+	assert.equal(harness.classifierServer.getModel(), fourB);
+	assert.deepEqual(addressEvents, [
+		{ address: "127.0.0.1:49167", model: "0.8B" },
+		{ address: undefined, model: "4B" },
+	]);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(children[1].signals, ["SIGTERM"]);
+});
+
+test("a throwing address listener does not break the server lifecycle", async () => {
+	const child = new FakeProcess();
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => 49_170,
+		spawnServer: () => child as unknown as ChildProcess,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+	harness.classifierServer.onAddressChange(() => {
+		throw new Error("listener failed");
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	assert.equal(
+		await harness.classifierServer.ensureReady(),
+		"http://127.0.0.1:49170/v1/chat/completions",
+	);
+
+	await harness.sessionShutdown();
+	assert.deepEqual(child.signals, ["SIGTERM"]);
+	assert.deepEqual(harness.notifications, []);
 });
 
 test("an owned server is restarted on another free port after a crash", async () => {
