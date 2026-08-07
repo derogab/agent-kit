@@ -124,6 +124,12 @@ async function withLock<T>(path: string, options: LockOptions, fn: () => Promise
  * leave can shut it down. `spawnServer` runs under the registry lock and must only
  * start the process, not wait for it to become healthy; it may report an undefined
  * pid when spawning failed, in which case nothing is recorded.
+ *
+ * Registration is best effort against hard crashes: a SIGKILL landing in the instant
+ * between spawning and recording the entry orphans the detached server until the user
+ * stops it. Reserve-then-spawn cannot close that window either — a crash between
+ * reserving and spawning, or between spawning and finalizing, leaves the same
+ * unmanageable state — so the microsecond window is accepted.
  */
 export async function joinServerRegistry(
 	size: ClassifierModelSize,
@@ -144,6 +150,11 @@ export async function joinServerRegistry(
 		}
 		const spawned = await spawnServer();
 		if (spawned.pid !== undefined) {
+			// A dead server's users are deliberately not carried into the new entry: they
+			// joined the old server, and leaveServerRegistry(oldPid) could never remove
+			// them from this one, so they would pin it in RAM while idle. They reattach
+			// through their own next join instead, at the cost of one respawn if this
+			// entry's users all leave first.
 			writeEntry(path, { pid: spawned.pid, port: spawned.port, users: [selfPid] });
 		}
 		return { owned: true, ...spawned };
