@@ -30,6 +30,9 @@ function createHarness(
 		getModel: () => selectedModel,
 		onAddressChange: (listener) => {
 			addressListener = listener;
+			return () => {
+				if (addressListener === listener) addressListener = undefined;
+			};
 		},
 		selectModel: async (model) => {
 			selectedModel = model;

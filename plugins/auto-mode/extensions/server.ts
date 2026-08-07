@@ -37,7 +37,7 @@ export interface ClassifierServer {
 	ensureReady(signal?: AbortSignal): Promise<string>;
 	getAddress(): string | undefined;
 	getModel(): ClassifierModel;
-	onAddressChange(listener: (address: string | undefined) => void): void;
+	onAddressChange(listener: (address: string | undefined) => void): () => void;
 	selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void>;
 	stop(): Promise<void>;
 }
@@ -192,7 +192,13 @@ export function registerClassifierServer(
 		const nextAddress = value === undefined ? undefined : new URL(value).host;
 		if (nextAddress === address) return;
 		address = nextAddress;
-		for (const listener of addressListeners) listener(address);
+		for (const listener of addressListeners) {
+			try {
+				listener(address);
+			} catch {
+				// Listener failures must not interrupt the server lifecycle.
+			}
+		}
 	}
 
 	function scheduleRestart(): void {
@@ -342,8 +348,8 @@ export function registerClassifierServer(
 		if (model.size === selectedModel.size) return;
 		saveModel(model);
 		const restart = active;
-		await stop();
 		selectedModel = model;
+		await stop();
 		if (restart) await ensureReady(signal);
 	}
 
@@ -371,6 +377,9 @@ export function registerClassifierServer(
 		getModel: () => selectedModel,
 		onAddressChange: (listener) => {
 			addressListeners.add(listener);
+			return () => {
+				addressListeners.delete(listener);
+			};
 		},
 		selectModel,
 		stop,
