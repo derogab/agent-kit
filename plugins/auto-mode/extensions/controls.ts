@@ -63,7 +63,6 @@ export function registerAutoModeControls(
 
 				try {
 					await classifierServer.selectModel(model, ctx.signal);
-					updateStatus(ctx, active);
 					ctx.ui.notify(`Classifier model set to ${model.size}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
@@ -72,6 +71,8 @@ export function registerAutoModeControls(
 						}`,
 						"error",
 					);
+				} finally {
+					updateStatus(ctx, active);
 				}
 				return;
 			}

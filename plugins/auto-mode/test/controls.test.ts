@@ -189,6 +189,31 @@ test("Model shows the default and changes the selected model", async () => {
 	}]);
 });
 
+test("a failed model switch still refreshes the status", async () => {
+	const fourB = CLASSIFIER_MODELS.find((model) => model.size === "4B");
+	assert.ok(fourB);
+	let selectedModel: ClassifierModel = DEFAULT_CLASSIFIER_MODEL;
+	const { command } = createHarness({
+		getModel: () => selectedModel,
+		selectModel: async (model) => {
+			selectedModel = model;
+			throw new Error("restart failed");
+		},
+	});
+	const ui = createCommandContext({ selections: [MODEL_OPTION, "4B"] });
+
+	await command.handler("", ui.context);
+
+	assert.deepEqual(ui.status, {
+		key: "auto-mode",
+		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
+	});
+	assert.deepEqual(ui.notifications, [{
+		message: "Classifier model could not change: restart failed",
+		type: "error",
+	}]);
+});
+
 test("Status shows the current status and actions", async () => {
 	const { command } = createHarness();
 	const ui = createCommandContext({ selections: [STATUS_OPTION] });
