@@ -200,7 +200,9 @@ async function stopProcessById(
 	try {
 		kill(pid, "SIGTERM");
 	} catch {
-		return; // Already gone.
+		// Either gone (ESRCH) or unsignallable from here (EPERM on another user's
+		// process, which isProcessAlive reports as alive); escalating fails the same way.
+		return;
 	}
 	const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
 	while (isAlive(pid)) {
@@ -208,7 +210,7 @@ async function stopProcessById(
 			try {
 				kill(pid, "SIGKILL");
 			} catch {
-				// Exited between the liveness check and the signal.
+				// Exited between the liveness check and the signal, or is unsignallable.
 			}
 			return;
 		}
@@ -310,6 +312,9 @@ export function registerClassifierServer(
 				model.size,
 				async () => {
 					const port = await getFreePort();
+					// Allocating the port yields, so this attempt may have been aborted or
+					// superseded meanwhile: never spawn a server nobody is waiting for.
+					if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
 					const child = launchServer("llama", [
 						"serve",
 						"--host",

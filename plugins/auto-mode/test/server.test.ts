@@ -619,6 +619,31 @@ test("a server spawned under a reclaimed registry lock is stopped, not leaked", 
 	await harness.sessionShutdown();
 });
 
+test("an attempt aborted while allocating its port never spawns a server", async () => {
+	let spawned = false;
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => {
+			// The session stops while the port allocation is still in flight.
+			await harness.classifierServer.stop();
+			return 49_193;
+		},
+		spawnServer: () => {
+			spawned = true;
+			return new FakeProcess() as unknown as ChildProcess;
+		},
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await assert.rejects(harness.classifierServer.ensureReady(), { name: "AbortError" });
+
+	assert.equal(spawned, false);
+	assert.equal(existsSync(join(harness.registryDirectory, "auto-mode-server-0.8B.json")), false);
+
+	await harness.sessionShutdown();
+});
+
 test("the shared server pid is signalled when it owns the port's listener", async () => {
 	const registryDirectory = seedRegistry({ pid: 7042, port: 49_190, users: [] });
 	const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
