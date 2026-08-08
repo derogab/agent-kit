@@ -62,8 +62,10 @@ function readEntry(path: string): RegistryEntry | undefined {
 
 function writeEntry(path: string, entry: RegistryEntry): void {
 	// Write-then-rename so a process dying mid-write cannot leave a truncated entry
-	// behind; the previous valid entry survives instead.
-	const temporaryPath = `${path}.tmp`;
+	// behind; the previous valid entry survives instead. The temporary name is
+	// per-process so a writer whose stale-looking lock was reclaimed while it was
+	// paused cannot mix its bytes into another writer's rename.
+	const temporaryPath = `${path}.${process.pid}.tmp`;
 	writeFileSync(temporaryPath, `${JSON.stringify(entry, null, 2)}\n`, "utf8");
 	renameSync(temporaryPath, path);
 }

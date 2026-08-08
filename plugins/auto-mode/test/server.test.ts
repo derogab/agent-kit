@@ -590,6 +590,32 @@ test("shutdown does not signal the shared server pid when its port no longer ans
 	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
 });
 
+test("a failed attach reclaims a zombie server this instance last referenced", async () => {
+	const registryDirectory = seedRegistry({ pid: 7042, port: 49_189, users: [] });
+	const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		healthCheckIntervalMs: 0,
+		healthCheckTimeoutMs: 0,
+		isProcessAlive: (pid) => pid === 7042 && !killed.some((kill) => kill.pid === pid),
+		killProcess: (pid, signal) => killed.push({ pid, signal }),
+		registryDirectory,
+		// The zombie's owner is gone; it answers on its port but never becomes healthy.
+		fetch: (async () => new Response(null, { status: 503 })) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await assert.rejects(
+		harness.classifierServer.ensureReady(),
+		/llama serve did not become ready in time/,
+	);
+
+	assert.deepEqual(killed, [{ pid: 7042, signal: "SIGTERM" }]);
+	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
+
+	await harness.sessionShutdown();
+});
+
 test("a throwing address listener does not break the server lifecycle", async () => {
 	const child = new FakeProcess();
 	const harness = createHarness({

@@ -375,16 +375,21 @@ export function registerClassifierServer(
 					// Aborted, not broken: another instance may share this server, so
 					// release it through the registry refcount.
 					await releaseServer(membership, serverProcess);
-				} else {
+				} else if (serverProcess) {
 					try {
 						await leaveServerRegistry(membership.size, membership.pid, registryDependencies);
 					} catch {
 						// Best effort: a stale entry is corrected by the next join.
 					}
-					// A server that failed to start must not linger, but only ever signal a
-					// process this instance spawned itself: after a failed attach the entry
-					// may have been stale, with a pid that now belongs to something else.
-					if (serverProcess) await stopProcess(serverProcess);
+					// An owned server that failed to start must not linger. It dies even when
+					// others are registered: a hung-but-alive process would otherwise survive
+					// every instance's refcounted cleanup and pin their retry loops forever.
+					await stopProcess(serverProcess);
+				} else {
+					// A failed attach still releases through the refcount: with the owner gone
+					// this instance may hold the last reference to a zombie, and the port probe
+					// in releaseServer reclaims it without ever signalling a recycled pid.
+					await releaseServer(membership, serverProcess);
 				}
 			} else if (!membership && serverProcess) {
 				await stopProcess(serverProcess);
