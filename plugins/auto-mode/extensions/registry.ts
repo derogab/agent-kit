@@ -1,0 +1,256 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { ClassifierModelSize } from "./model.ts";
+
+const LOCK_RETRY_MS = 50;
+const LOCK_TIMEOUT_MS = 10_000;
+// The lock is held for milliseconds, so one this old belongs to a crashed process.
+// Reclaiming can in principle steal the lock from a live holder paused mid-operation
+// for 30+ seconds; commits therefore re-validate lease ownership first (see withLock).
+const LOCK_STALE_MS = 30_000;
+
+/** A classifier server another Pi instance may share, as recorded on disk. */
+export interface JoinedServer {
+	owned: boolean;
+	pid: number | undefined;
+	port: number;
+}
+
+interface RegistryEntry {
+	pid: number;
+	port: number;
+	users: number[];
+}
+
+export interface ServerRegistryDependencies {
+	directory?: string;
+	isProcessAlive?: (pid: number) => boolean;
+	lockRetryMs?: number;
+	lockStaleMs?: number;
+	lockTimeoutMs?: number;
+	selfPid?: number;
+}
+
+/** Probe liveness with signal 0; EPERM means the process exists but belongs to another user. */
+export function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+function registryPath(directory: string, size: ClassifierModelSize): string {
+	return join(directory, `auto-mode-server-${size}.json`);
+}
+
+function readEntry(path: string): RegistryEntry | undefined {
+	let entry: RegistryEntry;
+	try {
+		entry = JSON.parse(readFileSync(path, "utf8")) as RegistryEntry;
+	} catch {
+		// A missing or corrupt entry means no shared server is registered.
+		return undefined;
+	}
+	const valid =
+		typeof entry?.pid === "number" &&
+		typeof entry?.port === "number" &&
+		Array.isArray(entry?.users) &&
+		entry.users.every((user) => typeof user === "number");
+	return valid ? entry : undefined;
+}
+
+function writeEntry(path: string, entry: RegistryEntry): void {
+	// Write-then-rename so a process dying mid-write cannot leave a truncated entry
+	// behind; the previous valid entry survives instead. The temporary name is
+	// per-process so a writer whose stale-looking lock was reclaimed while it was
+	// paused cannot mix its bytes into another writer's rename.
+	const temporaryPath = `${path}.${process.pid}.tmp`;
+	writeFileSync(temporaryPath, `${JSON.stringify(entry, null, 2)}\n`, "utf8");
+	renameSync(temporaryPath, path);
+}
+
+interface LockOptions {
+	retryMs: number;
+	staleMs: number;
+	timeoutMs: number;
+}
+
+/** Raised by `requireLease` so callers can tell a lost lease from a broken registry. */
+class LockReclaimedError extends Error {}
+
+function lockOptions(dependencies: ServerRegistryDependencies): LockOptions {
+	return {
+		retryMs: dependencies.lockRetryMs ?? LOCK_RETRY_MS,
+		staleMs: dependencies.lockStaleMs ?? LOCK_STALE_MS,
+		timeoutMs: dependencies.lockTimeoutMs ?? LOCK_TIMEOUT_MS,
+	};
+}
+
+/**
+ * Serialize registry reads and writes across Pi instances via an exclusive lock file.
+ *
+ * The lock carries a per-acquisition lease token and `fn` receives `requireLease`,
+ * which throws when the lock no longer holds this acquisition's token — the sign
+ * that a holder paused past staleMs had its lock reclaimed. Callers invoke it
+ * immediately before every commit, shrinking the unfenced gap from the whole
+ * critical section to the syscalls between the check and the write; a pause landing
+ * exactly there is accepted. Staleness itself stays mtime-based: only the holder
+ * ever reads the lock's content, so there is no read race with fresh locks. On exit
+ * the lock is only released while still owned, so a resumed stale holder cannot
+ * free the reclaimer's lock and invite a third concurrent writer.
+ */
+async function withLock<T>(
+	path: string,
+	options: LockOptions,
+	fn: (requireLease: () => void) => Promise<T> | T,
+): Promise<T> {
+	const lockPath = `${path}.lock`;
+	const lease = `${process.pid}:${randomUUID()}`;
+	const deadline = Date.now() + options.timeoutMs;
+	for (;;) {
+		try {
+			writeFileSync(lockPath, lease, { flag: "wx" });
+			break;
+		} catch (error) {
+			// Anything but "the lock already exists" (missing directory, permissions)
+			// will not resolve by waiting; surface it instead of spinning forever.
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		let stale = false;
+		try {
+			stale = statSync(lockPath).mtimeMs < Date.now() - options.staleMs;
+		} catch {
+			// The lock vanished between attempts; fall through to the bounded retry.
+		}
+		if (stale) {
+			rmSync(lockPath, { force: true });
+			continue;
+		}
+		if (Date.now() >= deadline) {
+			throw new Error("timed out waiting for the auto-mode server registry lock");
+		}
+		await new Promise((resolve) => setTimeout(resolve, options.retryMs));
+	}
+	const stillOwned = () => {
+		try {
+			return readFileSync(lockPath, "utf8") === lease;
+		} catch {
+			return false;
+		}
+	};
+	const requireLease = () => {
+		if (!stillOwned()) {
+			throw new LockReclaimedError("the auto-mode server registry lock was reclaimed");
+		}
+	};
+	try {
+		return await fn(requireLease);
+	} finally {
+		if (stillOwned()) rmSync(lockPath, { force: true });
+	}
+}
+
+/**
+ * Attach to the registered classifier server for this model size, or spawn a new one.
+ *
+ * The registry entry refcounts the Pi instances using the server so the last one to
+ * leave can shut it down. `spawnServer` runs under the registry lock and must only
+ * start the process, not wait for it to become healthy; it may report an undefined
+ * pid when spawning failed, in which case nothing is recorded.
+ *
+ * Registration is best effort against hard crashes: a SIGKILL landing in the instant
+ * between spawning and recording the entry orphans the detached server until the user
+ * stops it. Reserve-then-spawn cannot close that window either — a crash between
+ * reserving and spawning, or between spawning and finalizing, leaves the same
+ * unmanageable state — so the microsecond window is accepted.
+ */
+export async function joinServerRegistry(
+	size: ClassifierModelSize,
+	spawnServer: () => Promise<{ pid: number | undefined; port: number }>,
+	dependencies: ServerRegistryDependencies = {},
+): Promise<JoinedServer> {
+	const directory = dependencies.directory ?? getAgentDir();
+	const alive = dependencies.isProcessAlive ?? isProcessAlive;
+	const selfPid = dependencies.selfPid ?? process.pid;
+	mkdirSync(directory, { recursive: true });
+	const path = registryPath(directory, size);
+	return withLock(path, lockOptions(dependencies), async (requireLease) => {
+		const existing = readEntry(path);
+		if (existing && alive(existing.pid)) {
+			const users = [...new Set([...existing.users.filter(alive), selfPid])];
+			requireLease();
+			writeEntry(path, { ...existing, users });
+			return { owned: false, pid: existing.pid, port: existing.port };
+		}
+		const spawned = await spawnServer();
+		if (spawned.pid !== undefined) {
+			// The spawn above is the longest-held stretch of the lock, so this is where a
+			// paused holder is most likely to discover its lease is gone. Throwing leaves
+			// the entry untouched, and the caller's cleanup stops the just-spawned child.
+			requireLease();
+			// A dead server's users are deliberately not carried into the new entry: they
+			// joined the old server, and leaveServerRegistry(oldPid) could never remove
+			// them from this one, so they would pin it in RAM while idle. They reattach
+			// through their own next join instead, at the cost of one respawn if this
+			// entry's users all leave first.
+			writeEntry(path, { pid: spawned.pid, port: spawned.port, users: [selfPid] });
+		}
+		return { owned: true, ...spawned };
+	});
+}
+
+/**
+ * How a departing instance left the registry:
+ * - "kept": other live users remain, so the server must keep running.
+ * - "removed": the caller removed the final reference and must stop the server.
+ * - "unregistered": the entry was missing or already replaced; nothing references
+ *   serverPid anymore, but it was never this caller's entry to stop.
+ */
+export type LeaveResult = "kept" | "removed" | "unregistered";
+
+/**
+ * Drop this instance from the server's registry entry.
+ *
+ * A reclaimed lease is retried rather than surfaced: it means another instance
+ * committed while this leave was paused past staleMs, so the entry read under the
+ * lost lock is stale — it may now list a user that joined the very same server.
+ * The caller stops the server on "removed", so reporting that stale read (or letting
+ * the caller guess from a thrown error) kills a server someone else is using. Leaving
+ * touches nothing outside the registry, so a second pass under a fresh lock is safe
+ * and reconciles against whatever the reclaimer wrote.
+ */
+export async function leaveServerRegistry(
+	size: ClassifierModelSize,
+	serverPid: number,
+	dependencies: ServerRegistryDependencies = {},
+): Promise<LeaveResult> {
+	const directory = dependencies.directory ?? getAgentDir();
+	const alive = dependencies.isProcessAlive ?? isProcessAlive;
+	const selfPid = dependencies.selfPid ?? process.pid;
+	mkdirSync(directory, { recursive: true });
+	const path = registryPath(directory, size);
+	const options = lockOptions(dependencies);
+	const leave = () =>
+		withLock<LeaveResult>(path, options, (requireLease) => {
+			const entry = readEntry(path);
+			if (!entry || entry.pid !== serverPid) return "unregistered";
+			const users = entry.users.filter((user) => user !== selfPid && alive(user));
+			requireLease();
+			if (users.length === 0) {
+				rmSync(path, { force: true });
+				return "removed";
+			}
+			writeEntry(path, { ...entry, users });
+			return "kept";
+		});
+	try {
+		return await leave();
+	} catch (error) {
+		if (!(error instanceof LockReclaimedError)) throw error;
+		return await leave();
+	}
+}
