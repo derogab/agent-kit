@@ -63,6 +63,8 @@ function createHarness(dependencies: ClassifierServerDependencies) {
 		// spawn path unless they opt into sharing, and never signal real processes.
 		isProcessAlive: () => false,
 		killProcess: (pid, signal) => killedPids.push({ pid, signal }),
+		// Pid-to-port association reads as unavailable unless a test opts in.
+		listPortListeners: async () => undefined,
 		loadModel: () => DEFAULT_CLASSIFIER_MODEL,
 		saveModel: () => {},
 		...dependencies,
@@ -588,6 +590,43 @@ test("shutdown does not signal the shared server pid when its port no longer ans
 
 	assert.deepEqual(harness.killedPids, []);
 	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
+});
+
+test("the shared server pid is signalled when it owns the port's listener", async () => {
+	const registryDirectory = seedRegistry({ pid: 7042, port: 49_190, users: [] });
+	const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		isProcessAlive: (pid) => pid === 7042 && !killed.some((kill) => kill.pid === pid),
+		killProcess: (pid, signal) => killed.push({ pid, signal }),
+		listPortListeners: async () => [7042],
+		registryDirectory,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+	await harness.sessionShutdown();
+
+	assert.deepEqual(killed, [{ pid: 7042, signal: "SIGTERM" }]);
+});
+
+test("the shared server pid is spared when the port's listener is another process", async () => {
+	const registryDirectory = seedRegistry({ pid: 7042, port: 49_191, users: [] });
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		isProcessAlive: (pid) => pid === 7042,
+		// The recorded pid was recycled; the port is served by an unrelated process.
+		listPortListeners: async () => [9099],
+		registryDirectory,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.ensureReady();
+	await harness.sessionShutdown();
+
+	assert.deepEqual(harness.killedPids, []);
 });
 
 test("a failed attach reclaims a zombie server this instance last referenced", async () => {

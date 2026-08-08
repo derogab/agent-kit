@@ -6,6 +6,11 @@ import type { ClassifierModelSize } from "./model.ts";
 const LOCK_RETRY_MS = 50;
 const LOCK_TIMEOUT_MS = 10_000;
 // The lock is held for milliseconds, so one this old belongs to a crashed process.
+// Reclaiming can in principle steal the lock from a live holder paused mid-operation
+// for 30+ seconds; per-process temp names keep both writers' entries internally
+// consistent and the last write wins. A refcount lost that way is self-healing —
+// pid liveness checks and the pre-kill port/listener probes catch it downstream —
+// so no commit fencing (which would need versioned CAS storage) is layered on top.
 const LOCK_STALE_MS = 30_000;
 
 /** A classifier server another Pi instance may share, as recorded on disk. */

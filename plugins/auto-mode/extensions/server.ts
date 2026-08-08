@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -36,6 +36,7 @@ export interface ClassifierServerDependencies {
 	healthCheckTimeoutMs?: number;
 	isProcessAlive?: (pid: number) => boolean;
 	killProcess?: (pid: number, signal: NodeJS.Signals) => void;
+	listPortListeners?: (port: number) => Promise<number[] | undefined>;
 	loadModel?: typeof loadClassifierModelPreference;
 	registryDirectory?: string;
 	restartDelayMs?: number;
@@ -167,6 +168,29 @@ async function stopProcess(serverProcess: ChildProcess): Promise<void> {
 	if (serverProcess.exitCode === null) serverProcess.kill("SIGKILL");
 }
 
+/**
+ * Pids listening on a local TCP port, or undefined when the OS association is
+ * unavailable (no lsof, as on Windows or minimal containers). Ties a registry
+ * pid to the live listener before it is signalled.
+ */
+function listPortListeners(port: number): Promise<number[] | undefined> {
+	return new Promise((resolve) => {
+		execFile("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { timeout: 2_000 }, (error, stdout) => {
+			if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+				resolve(undefined);
+				return;
+			}
+			// lsof exits non-zero when nothing matches; an empty list is a valid answer.
+			resolve(
+				stdout
+					.split("\n")
+					.map((line) => Number(line.trim()))
+					.filter((pid) => Number.isInteger(pid) && pid > 0),
+			);
+		});
+	});
+}
+
 /** Stop a shared server another Pi instance spawned, so only its pid is known. */
 async function stopProcessById(
 	pid: number,
@@ -213,6 +237,7 @@ export function registerClassifierServer(
 		((pid: number, killSignal: NodeJS.Signals) => {
 			process.kill(pid, killSignal);
 		});
+	const findPortListeners = dependencies.listPortListeners ?? listPortListeners;
 	const loadModel = dependencies.loadModel ?? loadClassifierModelPreference;
 	const launchServer = dependencies.spawnServer ?? spawnClassifierServer;
 	const firstRestartDelay = dependencies.restartDelayMs ?? 1_000;
@@ -444,6 +469,12 @@ export function registerClassifierServer(
 		// confirm the recorded port still answers so a recycled pid never gets the signal.
 		if (outcome !== "removed") return;
 		if (!(await isServerResponding(membership.port))) return;
+		// Where the OS can name the port's listener, require it to be the recorded pid,
+		// turning the kill decision from coincidence into identity: a recycled pid next
+		// to an unrelated listener is spared. Without that view (no lsof), the port
+		// response above remains the best available evidence.
+		const listeners = await findPortListeners(membership.port);
+		if (listeners !== undefined && !listeners.includes(membership.pid)) return;
 		await stopProcessById(membership.pid, isAlive, killProcess);
 	}
 
