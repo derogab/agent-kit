@@ -79,6 +79,9 @@ interface LockOptions {
 	timeoutMs: number;
 }
 
+/** Raised by `requireLease` so callers can tell a lost lease from a broken registry. */
+class LockReclaimedError extends Error {}
+
 function lockOptions(dependencies: ServerRegistryDependencies): LockOptions {
 	return {
 		retryMs: dependencies.lockRetryMs ?? LOCK_RETRY_MS,
@@ -141,7 +144,7 @@ async function withLock<T>(
 	};
 	const requireLease = () => {
 		if (!stillOwned()) {
-			throw new Error("the auto-mode server registry lock was reclaimed");
+			throw new LockReclaimedError("the auto-mode server registry lock was reclaimed");
 		}
 	};
 	try {
@@ -209,7 +212,17 @@ export async function joinServerRegistry(
  */
 export type LeaveResult = "kept" | "removed" | "unregistered";
 
-/** Drop this instance from the server's registry entry. */
+/**
+ * Drop this instance from the server's registry entry.
+ *
+ * A reclaimed lease is retried rather than surfaced: it means another instance
+ * committed while this leave was paused past staleMs, so the entry read under the
+ * lost lock is stale — it may now list a user that joined the very same server.
+ * The caller stops the server on "removed", so reporting that stale read (or letting
+ * the caller guess from a thrown error) kills a server someone else is using. Leaving
+ * touches nothing outside the registry, so a second pass under a fresh lock is safe
+ * and reconciles against whatever the reclaimer wrote.
+ */
 export async function leaveServerRegistry(
 	size: ClassifierModelSize,
 	serverPid: number,
@@ -220,16 +233,24 @@ export async function leaveServerRegistry(
 	const selfPid = dependencies.selfPid ?? process.pid;
 	mkdirSync(directory, { recursive: true });
 	const path = registryPath(directory, size);
-	return withLock<LeaveResult>(path, lockOptions(dependencies), (requireLease) => {
-		const entry = readEntry(path);
-		if (!entry || entry.pid !== serverPid) return "unregistered";
-		const users = entry.users.filter((user) => user !== selfPid && alive(user));
-		requireLease();
-		if (users.length === 0) {
-			rmSync(path, { force: true });
-			return "removed";
-		}
-		writeEntry(path, { ...entry, users });
-		return "kept";
-	});
+	const options = lockOptions(dependencies);
+	const leave = () =>
+		withLock<LeaveResult>(path, options, (requireLease) => {
+			const entry = readEntry(path);
+			if (!entry || entry.pid !== serverPid) return "unregistered";
+			const users = entry.users.filter((user) => user !== selfPid && alive(user));
+			requireLease();
+			if (users.length === 0) {
+				rmSync(path, { force: true });
+				return "removed";
+			}
+			writeEntry(path, { ...entry, users });
+			return "kept";
+		});
+	try {
+		return await leave();
+	} catch (error) {
+		if (!(error instanceof LockReclaimedError)) throw error;
+		return await leave();
+	}
 }

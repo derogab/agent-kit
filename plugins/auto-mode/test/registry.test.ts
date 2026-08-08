@@ -165,6 +165,33 @@ test("a holder whose lock was reclaimed cannot commit over the newer entry", asy
 	assert.equal(readFileSync(lockPath, "utf8"), "9999:reclaimed-by-another-instance");
 });
 
+test("a leave whose lock was reclaimed reconciles with the newer entry", async () => {
+	const directory = tempDir();
+	const lockPath = `${entryPath(directory)}.lock`;
+	writeFileSync(entryPath(directory), JSON.stringify({ pid: 111, port: 49_200, users: [42, 43] }));
+	let reclaimed = false;
+
+	const outcome = await leaveServerRegistry("0.8B", 111, {
+		directory,
+		isProcessAlive: (pid) => {
+			if (pid === 43 && !reclaimed) {
+				reclaimed = true;
+				// While this holder scans the users, its lock looks stale to another
+				// instance, which joins the same server and releases the lock again.
+				writeFileSync(entryPath(directory), JSON.stringify({ pid: 111, port: 49_200, users: [42, 44] }));
+				rmSync(lockPath, { force: true });
+			}
+			return pid !== 43;
+		},
+		selfPid: 42,
+	});
+
+	// The stale read saw no live users left, which would have stopped the server the
+	// reclaimer just joined; the retry sees its user instead.
+	assert.equal(outcome, "kept");
+	assert.deepEqual(readEntry(directory), { pid: 111, port: 49_200, users: [44] });
+});
+
 test("a stale lock left by a crashed process is broken", async () => {
 	const directory = tempDir();
 	const lockPath = `${entryPath(directory)}.lock`;
