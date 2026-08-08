@@ -592,6 +592,33 @@ test("shutdown does not signal the shared server pid when its port no longer ans
 	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
 });
 
+test("a server spawned under a reclaimed registry lock is stopped, not leaked", async () => {
+	const registryDirectory = tempRegistryDir();
+	const child = new FakeProcess();
+	const harness = createHarness({
+		findCachedModel: async () => "/cache/model.gguf",
+		findFreePort: async () => 49_192,
+		registryDirectory,
+		spawnServer: () => {
+			// Another instance reclaimed the lock while this spawn was in flight.
+			writeFileSync(
+				join(registryDirectory, "auto-mode-server-0.8B.json.lock"),
+				"9999:reclaimed-by-another-instance",
+			);
+			return child as unknown as ChildProcess;
+		},
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await assert.rejects(harness.classifierServer.ensureReady(), /registry lock was reclaimed/);
+
+	assert.deepEqual(child.signals, ["SIGTERM"]);
+	assert.equal(existsSync(join(registryDirectory, "auto-mode-server-0.8B.json")), false);
+
+	await harness.sessionShutdown();
+});
+
 test("the shared server pid is signalled when it owns the port's listener", async () => {
 	const registryDirectory = seedRegistry({ pid: 7042, port: 49_190, users: [] });
 	const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];

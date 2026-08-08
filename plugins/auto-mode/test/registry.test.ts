@@ -138,6 +138,33 @@ test("leaving with a missing registry directory reports unregistered instead of 
 	assert.equal(outcome, "unregistered");
 });
 
+test("a holder whose lock was reclaimed cannot commit over the newer entry", async () => {
+	const directory = tempDir();
+	const lockPath = `${entryPath(directory)}.lock`;
+	let spawned = false;
+
+	await assert.rejects(
+		joinServerRegistry(
+			"0.8B",
+			async () => {
+				spawned = true;
+				// While this holder is busy, its lock looks stale to another instance,
+				// which reclaims it and registers its own server.
+				writeFileSync(lockPath, "9999:reclaimed-by-another-instance");
+				writeFileSync(entryPath(directory), JSON.stringify({ pid: 222, port: 49_300, users: [43] }));
+				return { pid: 111, port: 49_200 };
+			},
+			{ directory, isProcessAlive: () => true, selfPid: 42 },
+		),
+		/registry lock was reclaimed/,
+	);
+
+	assert.equal(spawned, true);
+	// The newer entry survives with its user, and the reclaimer still holds the lock.
+	assert.deepEqual(readEntry(directory), { pid: 222, port: 49_300, users: [43] });
+	assert.equal(readFileSync(lockPath, "utf8"), "9999:reclaimed-by-another-instance");
+});
+
 test("a stale lock left by a crashed process is broken", async () => {
 	const directory = tempDir();
 	const lockPath = `${entryPath(directory)}.lock`;

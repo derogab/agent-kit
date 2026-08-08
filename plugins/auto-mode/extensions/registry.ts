@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -7,10 +8,7 @@ const LOCK_RETRY_MS = 50;
 const LOCK_TIMEOUT_MS = 10_000;
 // The lock is held for milliseconds, so one this old belongs to a crashed process.
 // Reclaiming can in principle steal the lock from a live holder paused mid-operation
-// for 30+ seconds; per-process temp names keep both writers' entries internally
-// consistent and the last write wins. A refcount lost that way is self-healing —
-// pid liveness checks and the pre-kill port/listener probes catch it downstream —
-// so no commit fencing (which would need versioned CAS storage) is layered on top.
+// for 30+ seconds; commits therefore re-validate lease ownership first (see withLock).
 const LOCK_STALE_MS = 30_000;
 
 /** A classifier server another Pi instance may share, as recorded on disk. */
@@ -89,13 +87,30 @@ function lockOptions(dependencies: ServerRegistryDependencies): LockOptions {
 	};
 }
 
-/** Serialize registry reads and writes across Pi instances via an exclusive lock file. */
-async function withLock<T>(path: string, options: LockOptions, fn: () => Promise<T> | T): Promise<T> {
+/**
+ * Serialize registry reads and writes across Pi instances via an exclusive lock file.
+ *
+ * The lock carries a per-acquisition lease token and `fn` receives `requireLease`,
+ * which throws when the lock no longer holds this acquisition's token — the sign
+ * that a holder paused past staleMs had its lock reclaimed. Callers invoke it
+ * immediately before every commit, shrinking the unfenced gap from the whole
+ * critical section to the syscalls between the check and the write; a pause landing
+ * exactly there is accepted. Staleness itself stays mtime-based: only the holder
+ * ever reads the lock's content, so there is no read race with fresh locks. On exit
+ * the lock is only released while still owned, so a resumed stale holder cannot
+ * free the reclaimer's lock and invite a third concurrent writer.
+ */
+async function withLock<T>(
+	path: string,
+	options: LockOptions,
+	fn: (requireLease: () => void) => Promise<T> | T,
+): Promise<T> {
 	const lockPath = `${path}.lock`;
+	const lease = `${process.pid}:${randomUUID()}`;
 	const deadline = Date.now() + options.timeoutMs;
 	for (;;) {
 		try {
-			writeFileSync(lockPath, "", { flag: "wx" });
+			writeFileSync(lockPath, lease, { flag: "wx" });
 			break;
 		} catch (error) {
 			// Anything but "the lock already exists" (missing directory, permissions)
@@ -117,10 +132,22 @@ async function withLock<T>(path: string, options: LockOptions, fn: () => Promise
 		}
 		await new Promise((resolve) => setTimeout(resolve, options.retryMs));
 	}
+	const stillOwned = () => {
+		try {
+			return readFileSync(lockPath, "utf8") === lease;
+		} catch {
+			return false;
+		}
+	};
+	const requireLease = () => {
+		if (!stillOwned()) {
+			throw new Error("the auto-mode server registry lock was reclaimed");
+		}
+	};
 	try {
-		return await fn();
+		return await fn(requireLease);
 	} finally {
-		rmSync(lockPath, { force: true });
+		if (stillOwned()) rmSync(lockPath, { force: true });
 	}
 }
 
@@ -148,15 +175,20 @@ export async function joinServerRegistry(
 	const selfPid = dependencies.selfPid ?? process.pid;
 	mkdirSync(directory, { recursive: true });
 	const path = registryPath(directory, size);
-	return withLock(path, lockOptions(dependencies), async () => {
+	return withLock(path, lockOptions(dependencies), async (requireLease) => {
 		const existing = readEntry(path);
 		if (existing && alive(existing.pid)) {
 			const users = [...new Set([...existing.users.filter(alive), selfPid])];
+			requireLease();
 			writeEntry(path, { ...existing, users });
 			return { owned: false, pid: existing.pid, port: existing.port };
 		}
 		const spawned = await spawnServer();
 		if (spawned.pid !== undefined) {
+			// The spawn above is the longest-held stretch of the lock, so this is where a
+			// paused holder is most likely to discover its lease is gone. Throwing leaves
+			// the entry untouched, and the caller's cleanup stops the just-spawned child.
+			requireLease();
 			// A dead server's users are deliberately not carried into the new entry: they
 			// joined the old server, and leaveServerRegistry(oldPid) could never remove
 			// them from this one, so they would pin it in RAM while idle. They reattach
@@ -188,10 +220,11 @@ export async function leaveServerRegistry(
 	const selfPid = dependencies.selfPid ?? process.pid;
 	mkdirSync(directory, { recursive: true });
 	const path = registryPath(directory, size);
-	return withLock<LeaveResult>(path, lockOptions(dependencies), () => {
+	return withLock<LeaveResult>(path, lockOptions(dependencies), (requireLease) => {
 		const entry = readEntry(path);
 		if (!entry || entry.pid !== serverPid) return "unregistered";
 		const users = entry.users.filter((user) => user !== selfPid && alive(user));
+		requireLease();
 		if (users.length === 0) {
 			rmSync(path, { force: true });
 			return "removed";
