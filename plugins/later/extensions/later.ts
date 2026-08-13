@@ -64,14 +64,24 @@ export default function (pi: ExtensionAPI) {
 			const prompt = prompts[index];
 			if (prompt === undefined) return;
 
-			prompts.splice(index, 1);
-			persist();
+			// Remove only after delivery is accepted, so a failed run keeps the prompt
+			try {
+				if (ctx.isIdle()) {
+					await pi.sendUserMessage(prompt);
+				} else {
+					await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+					ctx.ui.notify("Queued as follow-up", "info");
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Could not run saved prompt, kept in list: ${message}`, "error");
+				return;
+			}
 
-			if (ctx.isIdle()) {
-				pi.sendUserMessage(prompt);
-			} else {
-				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-				ctx.ui.notify("Queued as follow-up", "info");
+			const removeIndex = prompts.indexOf(prompt);
+			if (removeIndex !== -1) {
+				prompts.splice(removeIndex, 1);
+				persist();
 			}
 		},
 	});
