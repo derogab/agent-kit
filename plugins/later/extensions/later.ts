@@ -12,7 +12,8 @@ export default function (pi: ExtensionAPI) {
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
 				const data = entry.data as { prompts?: string[] } | undefined;
-				prompts = data?.prompts ?? [];
+				// Clone: entries are live references, and prompts is mutated in place later
+				prompts = [...(data?.prompts ?? [])];
 			}
 		}
 	};
