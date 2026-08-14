@@ -116,7 +116,7 @@ test("acknowledges an idle prompt transformed by an input handler", async () => 
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
-test("removes the selected duplicate prompt", async () => {
+test("removes the selected duplicate follow-up when its turn starts", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("A");
 	await fixture.run("B");
@@ -125,6 +125,10 @@ test("removes the selected duplicate prompt", async () => {
 	await fixture.run("");
 
 	assert.deepEqual(fixture.sent, [{ prompt: "A", options: { deliverAs: "followUp" } }]);
+	// Queueing the follow-up must not remove the prompt before delivery.
+	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B", "A"]);
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
 });
 
@@ -138,6 +142,22 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
 
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
+});
+
+test("keeps a queued follow-up when another turn starts first", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("B");
+	await fixture.run("");
+
+	assert.deepEqual(fixture.sent, [{ prompt: "B", options: { deliverAs: "followUp" } }]);
+	assert.deepEqual(latestPrompts(fixture.entries), ["B"]);
+
+	// A user-typed message overtakes the queued follow-up.
+	await fixture.handlers.get("before_agent_start")!({ prompt: "typed by user" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["B"]);
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: "B" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
 test("removes a prompt without running it when Remove is chosen", async () => {

@@ -9,14 +9,22 @@ interface SavedPrompt {
 	text: string;
 }
 
+interface PendingDelivery {
+	prompt: SavedPrompt;
+	// An idle send triggers the very next turn, so a text mismatch there means an
+	// input handler transformed the prompt. A follow-up can be overtaken by a
+	// user-typed message, so it is acknowledged only by an exact text match.
+	idle: boolean;
+}
+
 export default function (pi: ExtensionAPI) {
 	// Saved prompts, oldest first. Reconstructed from session entries.
 	let prompts: SavedPrompt[] = [];
-	let pendingIdleDelivery: SavedPrompt | undefined;
+	let pendingDeliveries: PendingDelivery[] = [];
 
 	const reconstructState = (ctx: ExtensionContext) => {
 		prompts = [];
-		pendingIdleDelivery = undefined;
+		pendingDeliveries = [];
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
 				const data = entry.data as { prompts?: string[] } | undefined;
@@ -48,14 +56,19 @@ export default function (pi: ExtensionAPI) {
 
 	const toLabel = (prompt: SavedPrompt, index: number) => `${index + 1}. ${truncate(prompt.text)}`;
 
-	pi.on("before_agent_start", async () => {
-		const prompt = pendingIdleDelivery;
-		if (prompt === undefined) return;
+	pi.on("before_agent_start", async (event) => {
+		if (pendingDeliveries.length === 0) return;
 
-		// The next accepted idle turn is the pending delivery, even if an input
-		// handler transformed its text before this event.
-		pendingIdleDelivery = undefined;
-		remove(prompt);
+		// Match by text so a follow-up overtaken by a user-typed message is not
+		// acknowledged before it is actually delivered.
+		let index = pendingDeliveries.findIndex((delivery) => delivery.prompt.text === event.prompt);
+		if (index === -1) {
+			if (!pendingDeliveries[0].idle) return;
+			index = 0;
+		}
+
+		const [delivery] = pendingDeliveries.splice(index, 1);
+		remove(delivery.prompt);
 	});
 
 	pi.registerCommand("later", {
@@ -117,13 +130,15 @@ export default function (pi: ExtensionAPI) {
 
 				// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
 				// acknowledges that Pi accepted this idle turn after all preflight checks.
-				pendingIdleDelivery = prompt;
+				pendingDeliveries.push({ prompt, idle: true });
 				pi.sendUserMessage(prompt.text);
 				return;
 			}
 
+			// Keep the prompt in the list until before_agent_start acknowledges the
+			// follow-up turn, so an undelivered follow-up is not lost.
+			pendingDeliveries.push({ prompt, idle: false });
 			pi.sendUserMessage(prompt.text, { deliverAs: "followUp" });
-			remove(prompt);
 			ctx.ui.notify("Queued as follow-up", "info");
 		},
 	});

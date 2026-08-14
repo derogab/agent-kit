@@ -16,7 +16,7 @@ pi install npm:@derogab/pi-later
 
 - `/later <prompt>`: save a prompt for later.
 - `/later`: open the list of saved prompts. Pick one, then choose what to do with it:
-  - **Confirm**: send the prompt to the session and run it; the prompt is removed from the list.
+  - **Confirm**: send the prompt to the session and run it; the prompt is removed from the list once its turn actually starts, so a queued prompt that never runs is not lost.
   - **Remove**: delete the prompt from the list without running it.
 
   Pressing <kbd>Esc</kbd> on either dialog leaves the list unchanged.
