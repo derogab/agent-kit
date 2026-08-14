@@ -238,6 +238,31 @@ test("acknowledges overlapping idle deliveries independently", async () => {
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
+test("keeps an idle delivery when an earlier-queued follow-up's turn starts first", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("queued");
+	await fixture.run("idle");
+	fixture.queueSelection("1. queued");
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[0].prompt);
+
+	// The agent settles with the follow-up still queued; an idle send races in.
+	fixture.setIdle(true);
+	fixture.queueSelection("2. idle");
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[1].prompt);
+
+	// The earlier-queued follow-up's turn starts before the idle delivery's.
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[0].prompt }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["queued", "idle"]);
+
+	await startUserMessage(fixture, fixture.sent[0].prompt);
+	assert.deepEqual(latestPrompts(fixture.entries), ["idle"]);
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[1].prompt }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
 test("keeps an idle delivery when unrelated input starts first", async () => {
 	const fixture = setup();
 	await fixture.run("idle prompt");

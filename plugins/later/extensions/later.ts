@@ -147,8 +147,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, ctx) => {
 		let delivery = pendingIdleInputs.find((pending) => event.prompt.includes(pending.marker));
 		// If another input handler replaced the text, lifecycle order is safe only
-		// while this is the sole idle input waiting to start.
-		if (delivery === undefined && pendingIdleInputs.length === 1 && latestIdleInput === pendingIdleInputs[0]) {
+		// while this is the sole idle input waiting to start and the turn is not
+		// another tracked delivery's, e.g. an earlier-queued follow-up dequeued first.
+		if (
+			delivery === undefined &&
+			pendingIdleInputs.length === 1 &&
+			latestIdleInput === pendingIdleInputs[0] &&
+			!pendingDeliveries.some((pending) => event.prompt.includes(pending.marker))
+		) {
 			delivery = latestIdleInput;
 		}
 		if (delivery !== undefined) acknowledge(delivery);
