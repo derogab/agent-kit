@@ -102,7 +102,10 @@ export default function (pi: ExtensionAPI) {
 			const occurrence = prompts
 				.slice(0, previousIndex)
 				.filter((prompt) => prompt.text === delivery.prompt.text).length;
-			const replacement = restored.filter((prompt) => prompt.text === delivery.prompt.text)[occurrence];
+			const matches = restored.filter((prompt) => prompt.text === delivery.prompt.text);
+			// Clamp when navigation shrank the duplicate count: a stale object from the
+			// old array would make acknowledgement's identity lookup silently miss.
+			const replacement = matches[occurrence] ?? matches[matches.length - 1];
 			if (replacement !== undefined) delivery.prompt = replacement;
 		}
 		prompts = restored;

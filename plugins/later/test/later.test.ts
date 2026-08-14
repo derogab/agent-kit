@@ -373,6 +373,23 @@ test("keeps follow-up delivery tracking across session tree navigation", async (
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
+test("acknowledges a delivered duplicate after navigating to a branch with fewer copies", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("A");
+	await fixture.run("A");
+	fixture.queueSelection("2. A");
+	await fixture.run("");
+	const queued = fixture.sent[0].prompt;
+	assert.deepEqual(latestPrompts(fixture.entries), ["A", "A"]);
+
+	// Navigate to the branch point where only one copy was saved.
+	fixture.entries.pop();
+	await fixture.handlers.get("session_tree")!({}, fixture.ctx);
+
+	await startUserMessage(fixture, queued);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
 test("removes a prompt without running it when Remove is chosen", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("A");
