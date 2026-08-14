@@ -11,29 +11,45 @@ interface CustomEntry {
 	timestamp: string;
 }
 
-const setup = (options: { idle?: boolean; authError?: string } = {}) => {
+const setup = (
+	options: {
+		idle?: boolean;
+		authError?: string;
+		getAuth?: () => Promise<{ ok: true } | { ok: false; error: string }>;
+		initialEntries?: CustomEntry[];
+	} = {},
+) => {
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
-	const entries: CustomEntry[] = [];
+	const entries = (options.initialEntries ?? []).map((entry) => ({
+		...entry,
+		data: { prompts: [...entry.data.prompts] },
+	}));
 	const notifications: Array<{ message: string; level: string }> = [];
+	const selections: Array<{ title: string; labels: string[] }> = [];
 	const sent: Array<{ prompt: string; options?: { deliverAs: "followUp" } }> = [];
 	const queuedSelections: Array<string | undefined> = [];
+	let idle = options.idle ?? true;
 
 	const sessionManager = {
 		getBranch: () => entries,
 	};
 	const ctx = {
 		hasUI: true,
-		isIdle: () => options.idle ?? true,
+		isIdle: () => idle,
 		model: { provider: "test", id: "model" } as { provider: string; id: string } | undefined,
 		modelRegistry: {
-			getApiKeyAndHeaders: async () =>
-				options.authError === undefined ? { ok: true } : { ok: false, error: options.authError },
+			getApiKeyAndHeaders: async () => {
+				if (options.getAuth !== undefined) return options.getAuth();
+				return options.authError === undefined ? { ok: true } : { ok: false, error: options.authError };
+			},
 		},
 		sessionManager,
 		ui: {
 			notify: (message: string, level: string) => notifications.push({ message, level }),
-			select: async (_title: string, labels: string[]) =>
-				queuedSelections.length > 0 ? queuedSelections.shift() : labels[0],
+			select: async (title: string, labels: string[]) => {
+				selections.push({ title, labels: [...labels] });
+				return queuedSelections.length > 0 ? queuedSelections.shift() : labels[0];
+			},
 		},
 	};
 	let command: ((args: string, ctx: any) => Promise<void>) | undefined;
@@ -64,7 +80,11 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 		entries,
 		handlers,
 		notifications,
+		selections,
 		sent,
+		setIdle: (value: boolean) => {
+			idle = value;
+		},
 		queueSelection: (value: string | undefined) => {
 			queuedSelections.push(value);
 		},
@@ -78,6 +98,10 @@ const startUserMessage = async (fixture: ReturnType<typeof setup>, text: string)
 	const event = { message: { role: "user", content: [{ type: "text", text }] } };
 	await fixture.handlers.get("message_start")!(event, fixture.ctx);
 	return event;
+};
+
+const submitInput = async (fixture: ReturnType<typeof setup>, text: string, source = "extension") => {
+	await fixture.handlers.get("input")!({ text, source }, fixture.ctx);
 };
 
 test("keeps an idle prompt when no model is selected", async () => {
@@ -101,6 +125,37 @@ test("keeps an idle prompt when provider authentication is unavailable", async (
 	assert.match(fixture.notifications.at(-1)!.message, /kept in list: No API key/);
 });
 
+test("restores prompts from session state without mutating saved entries", async () => {
+	const source = setup();
+	await source.run("first");
+	await source.run("second");
+	const persisted = source.entries.map((entry) => [...entry.data.prompts]);
+	const fixture = setup({ initialEntries: source.entries });
+
+	await fixture.handlers.get("session_start")!({}, fixture.ctx);
+	await fixture.handlers.get("session_tree")!({}, fixture.ctx);
+	fixture.queueSelection("1. first");
+	fixture.queueSelection("Remove");
+	await fixture.run("");
+
+	assert.deepEqual(latestPrompts(fixture.entries), ["second"]);
+	assert.deepEqual(
+		fixture.entries.slice(0, persisted.length).map((entry) => entry.data.prompts),
+		persisted,
+	);
+	assert.deepEqual(source.entries.map((entry) => entry.data.prompts), persisted);
+});
+
+test("truncates labels for long saved prompts", async () => {
+	const fixture = setup();
+	const prompt = "x".repeat(81);
+	await fixture.run(prompt);
+	fixture.queueSelection(undefined);
+	await fixture.run("");
+
+	assert.deepEqual(fixture.selections, [{ title: "Saved prompts", labels: [`1. ${"x".repeat(80)}…`] }]);
+});
+
 test("removes an idle prompt only when Pi accepts the turn", async () => {
 	const fixture = setup();
 	await fixture.run("run me");
@@ -109,6 +164,7 @@ test("removes an idle prompt only when Pi accepts the turn", async () => {
 	assert.deepEqual(fixture.sent, [{ prompt: "run me", options: undefined }]);
 	assert.deepEqual(latestPrompts(fixture.entries), ["run me"]);
 
+	await submitInput(fixture, "run me");
 	await fixture.handlers.get("before_agent_start")!({ prompt: "run me" }, fixture.ctx);
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
@@ -118,8 +174,63 @@ test("acknowledges an idle prompt transformed by an input handler", async () => 
 	await fixture.run("original");
 	await fixture.run("");
 
+	await submitInput(fixture, "original");
 	await fixture.handlers.get("before_agent_start")!({ prompt: "transformed" }, fixture.ctx);
 	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("keeps an idle delivery when another delivery is pending", async () => {
+	const fixture = setup();
+	await fixture.run("idle prompt");
+	await fixture.run("");
+	await submitInput(fixture, "idle prompt");
+	fixture.setIdle(false);
+	await fixture.run("queued prompt");
+	fixture.queueSelection("2. queued prompt");
+	await fixture.run("");
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["idle prompt", "queued prompt"]);
+});
+
+test("keeps an idle delivery when unrelated input starts first", async () => {
+	const fixture = setup();
+	await fixture.run("idle prompt");
+	await fixture.run("");
+	await submitInput(fixture, "idle prompt");
+	await submitInput(fixture, "unrelated", "interactive");
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["idle prompt"]);
+});
+
+test("queues a prompt when the agent starts during authentication", async () => {
+	let authRequested!: () => void;
+	const requested = new Promise<void>((resolve) => {
+		authRequested = resolve;
+	});
+	let resolveAuth!: (result: { ok: true }) => void;
+	const auth = new Promise<{ ok: true }>((resolve) => {
+		resolveAuth = resolve;
+	});
+	const fixture = setup({
+		getAuth: async () => {
+			authRequested();
+			return auth;
+		},
+	});
+	await fixture.run("race-safe prompt");
+	const confirmation = fixture.run("");
+	await requested;
+	fixture.setIdle(false);
+	resolveAuth({ ok: true });
+	await confirmation;
+
+	assert.equal(fixture.sent.length, 1);
+	assert.equal(fixture.sent[0].prompt.startsWith("race-safe prompt\u2063later:"), true);
+	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
+	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["race-safe prompt"]);
 });
 
 test("removes the selected duplicate follow-up when its turn starts", async () => {
@@ -147,6 +258,7 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	await fixture.run("A");
 	fixture.queueSelection("3. A");
 	await fixture.run("");
+	await submitInput(fixture, "A");
 	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
 
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);

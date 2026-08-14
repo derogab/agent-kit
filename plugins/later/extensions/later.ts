@@ -20,10 +20,15 @@ export default function (pi: ExtensionAPI) {
 	// Saved prompts, oldest first. Reconstructed from session entries.
 	let prompts: SavedPrompt[] = [];
 	let pendingDeliveries: PendingDelivery[] = [];
+	// Tie an idle send to its input event before acknowledging before_agent_start.
+	let awaitingIdleInput: PendingDelivery | undefined;
+	let pendingIdleInput: PendingDelivery | undefined;
 
 	const reconstructState = (ctx: ExtensionContext) => {
 		prompts = [];
 		pendingDeliveries = [];
+		awaitingIdleInput = undefined;
+		pendingIdleInput = undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
 				const data = entry.data as { prompts?: string[] } | undefined;
@@ -56,6 +61,12 @@ export default function (pi: ExtensionAPI) {
 		remove(delivery.prompt);
 	};
 
+	const queueFollowUp = (prompt: SavedPrompt) => {
+		const delivery = { prompt, idle: false, marker: `\u2063later:${randomUUID()}\u2063` };
+		pendingDeliveries.push(delivery);
+		pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
+	};
+
 	const truncate = (text: string) => {
 		const singleLine = text.replace(/\s+/g, " ").trim();
 		return singleLine.length > MAX_LABEL_LENGTH ? `${singleLine.slice(0, MAX_LABEL_LENGTH)}…` : singleLine;
@@ -63,9 +74,21 @@ export default function (pi: ExtensionAPI) {
 
 	const toLabel = (prompt: SavedPrompt, index: number) => `${index + 1}. ${truncate(prompt.text)}`;
 
+	pi.on("input", async (event, ctx) => {
+		const delivery = awaitingIdleInput;
+		awaitingIdleInput = undefined;
+		// Any other input invalidates the idle delivery, so its turn cannot
+		// accidentally acknowledge the saved prompt.
+		pendingIdleInput =
+			event.source === "extension" && ctx.isIdle() && delivery?.prompt.text === event.text ? delivery : undefined;
+	});
+
 	pi.on("before_agent_start", async () => {
-		const delivery = pendingDeliveries.find((delivery) => delivery.idle);
-		if (delivery !== undefined) acknowledge(delivery);
+		// A transformed idle input is only safe to acknowledge when it was the
+		// sole pending delivery and the input lifecycle identified it.
+		const delivery = pendingIdleInput;
+		pendingIdleInput = undefined;
+		if (pendingDeliveries.length === 1 && delivery?.idle) acknowledge(delivery);
 	});
 
 	pi.on("message_start", async (event) => {
@@ -146,18 +169,22 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
-				// acknowledges that Pi accepted this idle turn after all preflight checks.
-				pendingDeliveries.push({ prompt, idle: true });
-				pi.sendUserMessage(prompt.text);
-				return;
+				// Authentication can yield while another turn begins. Only use an idle
+				// send if the agent is still idle; otherwise use a race-safe follow-up.
+				if (ctx.isIdle()) {
+					// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
+					// acknowledges that Pi accepted this idle turn after all preflight checks.
+					const delivery = { prompt, idle: true };
+					pendingDeliveries.push(delivery);
+					awaitingIdleInput = delivery;
+					pi.sendUserMessage(prompt.text);
+					return;
+				}
 			}
 
 			// Keep the prompt in the list until its marked follow-up user message
 			// actually starts, so an undelivered follow-up is not lost.
-			const delivery = { prompt, idle: false, marker: `\u2063later:${randomUUID()}\u2063` };
-			pendingDeliveries.push(delivery);
-			pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
+			queueFollowUp(prompt);
 			ctx.ui.notify("Queued as follow-up", "info");
 		},
 	});
