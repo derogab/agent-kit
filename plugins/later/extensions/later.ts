@@ -85,7 +85,7 @@ export default function (pi: ExtensionAPI) {
 
 	const queueFollowUp = (prompt: SavedPrompt) => {
 		const delivery = createDelivery(prompt, false);
-		pi.sendUserMessage(`${delivery.marker}${prompt.text}`, { deliverAs: "followUp" });
+		pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
 	};
 
 	const clearDequeuedFollowUps = (ctx: ExtensionContext) => {
@@ -232,10 +232,11 @@ export default function (pi: ExtensionAPI) {
 				// send if the agent is still idle; otherwise use a race-safe follow-up.
 				if (ctx.isIdle()) {
 					// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
-					// acknowledges that Pi accepted this idle turn after all preflight checks.
+					// acknowledges an immediate turn, while followUp keeps the send safe if
+					// streaming starts during asynchronous input handlers.
 					const delivery = createDelivery(prompt, true);
 					awaitingIdleInput = delivery;
-					pi.sendUserMessage(`${delivery.marker}${prompt.text}`);
+					pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
 					return;
 				}
 			}

@@ -72,7 +72,7 @@ const setup = (
 		},
 		sendUserMessage: (prompt: string, sendOptions?: { deliverAs: "followUp" }) => {
 			sent.push({ prompt, options: sendOptions });
-			if (sendOptions?.deliverAs === "followUp") pendingMessages.push(prompt);
+			if (sendOptions?.deliverAs === "followUp" && !idle) pendingMessages.push(prompt);
 		},
 	};
 
@@ -114,8 +114,8 @@ const submitInput = async (fixture: ReturnType<typeof setup>, text: string, sour
 };
 
 const assertHasInvisibleMarker = (sent: string, prompt: string) => {
-	assert.equal(sent.endsWith(prompt), true);
-	const marker = sent.slice(0, -prompt.length);
+	assert.equal(sent.startsWith(prompt), true);
+	const marker = sent.slice(prompt.length);
 	assert.notEqual(marker, "");
 	assert.doesNotMatch(marker, /[\x20-\x7e]/);
 };
@@ -179,6 +179,7 @@ test("removes an idle prompt only when Pi accepts the turn", async () => {
 
 	assert.equal(fixture.sent.length, 1);
 	assertHasInvisibleMarker(fixture.sent[0].prompt, "run me");
+	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
 	assert.deepEqual(latestPrompts(fixture.entries), ["run me"]);
 
 	await submitInput(fixture, fixture.sent[0].prompt);
@@ -186,6 +187,14 @@ test("removes an idle prompt only when Pi accepts the turn", async () => {
 	const event = await startUserMessage(fixture, fixture.sent[0].prompt);
 	assert.equal(event.message.content[0].text, "run me");
 	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("preserves a saved prompt prefix for input handlers", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("?quick run me");
+	await fixture.run("");
+
+	assertHasInvisibleMarker(fixture.sent[0].prompt, "?quick run me");
 });
 
 test("acknowledges an idle prompt transformed by an input handler", async () => {
