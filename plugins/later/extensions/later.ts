@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const ENTRY_TYPE = "later";
 const MAX_LABEL_LENGTH = 80;
+const ACTION_CONFIRM = "Confirm";
+const ACTION_REMOVE = "Remove";
 
 interface SavedPrompt {
 	text: string;
@@ -39,12 +41,12 @@ export default function (pi: ExtensionAPI) {
 		persist();
 	};
 
-	const toLabel = (prompt: SavedPrompt, index: number) => {
-		const singleLine = prompt.text.replace(/\s+/g, " ").trim();
-		const truncated =
-			singleLine.length > MAX_LABEL_LENGTH ? `${singleLine.slice(0, MAX_LABEL_LENGTH)}…` : singleLine;
-		return `${index + 1}. ${truncated}`;
+	const truncate = (text: string) => {
+		const singleLine = text.replace(/\s+/g, " ").trim();
+		return singleLine.length > MAX_LABEL_LENGTH ? `${singleLine.slice(0, MAX_LABEL_LENGTH)}…` : singleLine;
 	};
+
+	const toLabel = (prompt: SavedPrompt, index: number) => `${index + 1}. ${truncate(prompt.text)}`;
 
 	pi.on("before_agent_start", async () => {
 		const prompt = pendingIdleDelivery;
@@ -81,12 +83,25 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const labels = prompts.map(toLabel);
-			const choice = await ctx.ui.select("Saved prompts — pick one to run", labels);
+			const choice = await ctx.ui.select("Saved prompts", labels);
 			if (choice === undefined) return;
 
 			const index = labels.indexOf(choice);
 			const prompt = prompts[index];
 			if (prompt === undefined) return;
+
+			const action = await ctx.ui.select(`Selected: ${truncate(prompt.text)}`, [
+				ACTION_CONFIRM,
+				ACTION_REMOVE,
+			]);
+
+			if (action === ACTION_REMOVE) {
+				remove(prompt);
+				ctx.ui.notify(`Removed saved prompt (${prompts.length} pending)`, "info");
+				return;
+			}
+
+			if (action !== ACTION_CONFIRM) return;
 
 			if (ctx.isIdle()) {
 				if (ctx.model === undefined) {

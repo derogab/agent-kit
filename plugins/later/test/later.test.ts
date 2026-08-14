@@ -16,7 +16,7 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 	const entries: CustomEntry[] = [];
 	const notifications: Array<{ message: string; level: string }> = [];
 	const sent: Array<{ prompt: string; options?: { deliverAs: "followUp" } }> = [];
-	let selection: string | undefined;
+	const queuedSelections: Array<string | undefined> = [];
 
 	const sessionManager = {
 		getBranch: () => entries,
@@ -32,7 +32,8 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 		sessionManager,
 		ui: {
 			notify: (message: string, level: string) => notifications.push({ message, level }),
-			select: async (_title: string, labels: string[]) => selection ?? labels[0],
+			select: async (_title: string, labels: string[]) =>
+				queuedSelections.length > 0 ? queuedSelections.shift() : labels[0],
 		},
 	};
 	let command: ((args: string, ctx: any) => Promise<void>) | undefined;
@@ -64,8 +65,8 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 		handlers,
 		notifications,
 		sent,
-		setSelection: (value: string) => {
-			selection = value;
+		queueSelection: (value: string | undefined) => {
+			queuedSelections.push(value);
 		},
 		run: async (args: string) => command!(args, ctx),
 	};
@@ -120,7 +121,7 @@ test("removes the selected duplicate prompt", async () => {
 	await fixture.run("A");
 	await fixture.run("B");
 	await fixture.run("A");
-	fixture.setSelection("3. A");
+	fixture.queueSelection("3. A");
 	await fixture.run("");
 
 	assert.deepEqual(fixture.sent, [{ prompt: "A", options: { deliverAs: "followUp" } }]);
@@ -132,9 +133,33 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	await fixture.run("A");
 	await fixture.run("B");
 	await fixture.run("A");
-	fixture.setSelection("3. A");
+	fixture.queueSelection("3. A");
 	await fixture.run("");
 	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
 
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
+});
+
+test("removes a prompt without running it when Remove is chosen", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("A");
+	await fixture.run("B");
+	fixture.queueSelection("2. B");
+	fixture.queueSelection("Remove");
+	await fixture.run("");
+
+	assert.deepEqual(fixture.sent, []);
+	assert.deepEqual(latestPrompts(fixture.entries), ["A"]);
+	assert.match(fixture.notifications.at(-1)!.message, /Removed saved prompt \(1 pending\)/);
+});
+
+test("keeps a prompt when the action choice is cancelled", async () => {
+	const fixture = setup();
+	await fixture.run("keep me");
+	fixture.queueSelection("1. keep me");
+	fixture.queueSelection(undefined);
+	await fixture.run("");
+
+	assert.deepEqual(fixture.sent, []);
+	assert.deepEqual(latestPrompts(fixture.entries), ["keep me"]);
 });
