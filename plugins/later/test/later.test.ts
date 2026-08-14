@@ -436,6 +436,26 @@ test("acknowledges each pending duplicate distinctly after navigating to fewer c
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
+test("keeps a duplicate's occurrence identity across session tree navigation", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("A");
+	await fixture.run("A");
+	fixture.queueSelection("2. A");
+	await fixture.run("");
+	assert.deepEqual(latestPrompts(fixture.entries), ["A", "A"]);
+
+	await fixture.handlers.get("session_tree")!({}, fixture.ctx);
+
+	// Re-selecting the same second copy must share its pending delivery's
+	// prompt object, so both deliveries remove one saved entry total.
+	fixture.queueSelection("2. A");
+	await fixture.run("");
+
+	await startUserMessage(fixture, fixture.sent[0].prompt);
+	await startUserMessage(fixture, fixture.sent[1].prompt);
+	assert.deepEqual(latestPrompts(fixture.entries), ["A"]);
+});
+
 test("removes a prompt without running it when Remove is chosen", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("A");

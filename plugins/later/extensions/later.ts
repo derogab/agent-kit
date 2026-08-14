@@ -106,7 +106,14 @@ export default function (pi: ExtensionAPI) {
 
 			let replacement = remapped.get(delivery.prompt);
 			if (replacement === undefined) {
-				const index = available.findIndex((prompt) => prompt.text === delivery.prompt.text);
+				// Prefer the restored copy at the same same-text occurrence, so a
+				// delivery for a later duplicate can still share one removal with a
+				// re-selection of that same entry after reconstruction.
+				const sameText = (prompt: SavedPrompt) => prompt.text === delivery.prompt.text;
+				const ordinal = prompts.slice(0, prompts.indexOf(delivery.prompt)).filter(sameText).length;
+				const occurrence = restored.filter(sameText)[ordinal];
+				let index = occurrence === undefined ? -1 : available.indexOf(occurrence);
+				if (index === -1) index = available.findIndex(sameText);
 				if (index === -1) continue;
 				replacement = available[index];
 				available.splice(index, 1);
