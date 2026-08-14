@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "later";
@@ -11,10 +12,8 @@ interface SavedPrompt {
 
 interface PendingDelivery {
 	prompt: SavedPrompt;
-	// An idle send triggers the very next turn, so a text mismatch there means an
-	// input handler transformed the prompt. A follow-up can be overtaken by a
-	// user-typed message, so it is acknowledged only by an exact text match.
 	idle: boolean;
+	marker?: string;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -49,6 +48,14 @@ export default function (pi: ExtensionAPI) {
 		persist();
 	};
 
+	const acknowledge = (delivery: PendingDelivery) => {
+		const index = pendingDeliveries.indexOf(delivery);
+		if (index === -1) return;
+
+		pendingDeliveries.splice(index, 1);
+		remove(delivery.prompt);
+	};
+
 	const truncate = (text: string) => {
 		const singleLine = text.replace(/\s+/g, " ").trim();
 		return singleLine.length > MAX_LABEL_LENGTH ? `${singleLine.slice(0, MAX_LABEL_LENGTH)}…` : singleLine;
@@ -56,19 +63,30 @@ export default function (pi: ExtensionAPI) {
 
 	const toLabel = (prompt: SavedPrompt, index: number) => `${index + 1}. ${truncate(prompt.text)}`;
 
-	pi.on("before_agent_start", async (event) => {
-		if (pendingDeliveries.length === 0) return;
+	pi.on("before_agent_start", async () => {
+		const delivery = pendingDeliveries.find((delivery) => delivery.idle);
+		if (delivery !== undefined) acknowledge(delivery);
+	});
 
-		// Match by text so a follow-up overtaken by a user-typed message is not
-		// acknowledged before it is actually delivered.
-		let index = pendingDeliveries.findIndex((delivery) => delivery.prompt.text === event.prompt);
-		if (index === -1) {
-			if (!pendingDeliveries[0].idle) return;
-			index = 0;
-		}
+	pi.on("message_start", async (event) => {
+		const message = event.message;
+		if (message.role !== "user" || !("content" in message) || !Array.isArray(message.content)) return;
+		const content = message.content;
 
-		const [delivery] = pendingDeliveries.splice(index, 1);
-		remove(delivery.prompt);
+		const delivery = pendingDeliveries.find((delivery) => {
+			const marker = delivery.marker;
+			return marker !== undefined && content.some((part) => part.type === "text" && part.text.includes(marker));
+		});
+		if (delivery === undefined || delivery.marker === undefined) return;
+		const marker = delivery.marker;
+
+		// sendUserMessage() has no delivery ID for queued follow-ups. The marker
+		// survives queueing, then is removed before the user message is persisted
+		// or sent to the model.
+		message.content = content.map((part) =>
+			part.type === "text" ? { ...part, text: part.text.replace(marker, "") } : part,
+		);
+		acknowledge(delivery);
 	});
 
 	pi.registerCommand("later", {
@@ -135,10 +153,11 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Keep the prompt in the list until before_agent_start acknowledges the
-			// follow-up turn, so an undelivered follow-up is not lost.
-			pendingDeliveries.push({ prompt, idle: false });
-			pi.sendUserMessage(prompt.text, { deliverAs: "followUp" });
+			// Keep the prompt in the list until its marked follow-up user message
+			// actually starts, so an undelivered follow-up is not lost.
+			const delivery = { prompt, idle: false, marker: `\u2063later:${randomUUID()}\u2063` };
+			pendingDeliveries.push(delivery);
+			pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
 			ctx.ui.notify("Queued as follow-up", "info");
 		},
 	});

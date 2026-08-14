@@ -24,7 +24,7 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 	const ctx = {
 		hasUI: true,
 		isIdle: () => options.idle ?? true,
-		model: { provider: "test", id: "model" },
+		model: { provider: "test", id: "model" } as { provider: string; id: string } | undefined,
 		modelRegistry: {
 			getApiKeyAndHeaders: async () =>
 				options.authError === undefined ? { ok: true } : { ok: false, error: options.authError },
@@ -73,6 +73,12 @@ const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 };
 
 const latestPrompts = (entries: CustomEntry[]) => entries.at(-1)?.data.prompts;
+
+const startUserMessage = async (fixture: ReturnType<typeof setup>, text: string) => {
+	const event = { message: { role: "user", content: [{ type: "text", text }] } };
+	await fixture.handlers.get("message_start")!(event, fixture.ctx);
+	return event;
+};
 
 test("keeps an idle prompt when no model is selected", async () => {
 	const fixture = setup();
@@ -124,11 +130,13 @@ test("removes the selected duplicate follow-up when its turn starts", async () =
 	fixture.queueSelection("3. A");
 	await fixture.run("");
 
-	assert.deepEqual(fixture.sent, [{ prompt: "A", options: { deliverAs: "followUp" } }]);
+	assert.equal(fixture.sent.length, 1);
+	assert.equal(fixture.sent[0].prompt.startsWith("A\u2063later:"), true);
+	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
 	// Queueing the follow-up must not remove the prompt before delivery.
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B", "A"]);
 
-	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
+	await startUserMessage(fixture, fixture.sent[0].prompt);
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
 });
 
@@ -144,19 +152,22 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
 });
 
-test("keeps a queued follow-up when another turn starts first", async () => {
+test("keeps a queued follow-up when a user types the same text", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("B");
 	await fixture.run("");
 
-	assert.deepEqual(fixture.sent, [{ prompt: "B", options: { deliverAs: "followUp" } }]);
+	assert.equal(fixture.sent.length, 1);
+	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
 	assert.deepEqual(latestPrompts(fixture.entries), ["B"]);
 
-	// A user-typed message overtakes the queued follow-up.
-	await fixture.handlers.get("before_agent_start")!({ prompt: "typed by user" }, fixture.ctx);
-	assert.deepEqual(latestPrompts(fixture.entries), ["B"]);
-
+	// A user-typed message can overtake the queued follow-up with identical text.
 	await fixture.handlers.get("before_agent_start")!({ prompt: "B" }, fixture.ctx);
+	await startUserMessage(fixture, "B");
+	assert.deepEqual(latestPrompts(fixture.entries), ["B"]);
+
+	const event = await startUserMessage(fixture, fixture.sent[0].prompt);
+	assert.equal(event.message.content[0].text, "B");
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
