@@ -5,6 +5,9 @@ const ENTRY_TYPE = "later";
 const MAX_LABEL_LENGTH = 80;
 const ACTION_CONFIRM = "Confirm";
 const ACTION_REMOVE = "Remove";
+const MARKER_BOUNDARY = "\u2063";
+const VARIATION_SELECTOR_START = 0xfe00;
+const DELIVERY_MARKER_PATTERN = /\u2063[\uFE00-\uFE0F]{32}\u2063/g;
 
 interface SavedPrompt {
 	text: string;
@@ -13,33 +16,37 @@ interface SavedPrompt {
 interface PendingDelivery {
 	prompt: SavedPrompt;
 	idle: boolean;
-	marker?: string;
+	marker: string;
 }
 
 export default function (pi: ExtensionAPI) {
 	// Saved prompts, oldest first. Reconstructed from session entries.
 	let prompts: SavedPrompt[] = [];
 	let pendingDeliveries: PendingDelivery[] = [];
-	// Tie an idle send to its input event before acknowledging before_agent_start.
+	// Tie idle sends to their input lifecycle, including overlapping sends.
 	let awaitingIdleInput: PendingDelivery | undefined;
-	let pendingIdleInput: PendingDelivery | undefined;
+	let latestIdleInput: PendingDelivery | undefined;
+	let pendingIdleInputs: PendingDelivery[] = [];
 
-	const reconstructState = (ctx: ExtensionContext) => {
-		prompts = [];
-		pendingDeliveries = [];
-		awaitingIdleInput = undefined;
-		pendingIdleInput = undefined;
+	const readPrompts = (ctx: ExtensionContext) => {
+		let restored: SavedPrompt[] = [];
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
 				const data = entry.data as { prompts?: string[] } | undefined;
 				// Use distinct objects so duplicate prompt text still has stable selection identity.
-				prompts = (data?.prompts ?? []).map((text) => ({ text }));
+				restored = (data?.prompts ?? []).map((text) => ({ text }));
 			}
 		}
+		return restored;
 	};
 
-	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	const resetState = (ctx: ExtensionContext) => {
+		prompts = readPrompts(ctx);
+		pendingDeliveries = [];
+		awaitingIdleInput = undefined;
+		latestIdleInput = undefined;
+		pendingIdleInputs = [];
+	};
 
 	const persist = () => {
 		pi.appendEntry(ENTRY_TYPE, { prompts: prompts.map((prompt) => prompt.text) });
@@ -58,14 +65,53 @@ export default function (pi: ExtensionAPI) {
 		if (index === -1) return;
 
 		pendingDeliveries.splice(index, 1);
+		pendingIdleInputs = pendingIdleInputs.filter((pending) => pending !== delivery);
+		if (latestIdleInput === delivery) latestIdleInput = undefined;
 		remove(delivery.prompt);
 	};
 
-	const queueFollowUp = (prompt: SavedPrompt) => {
-		const delivery = { prompt, idle: false, marker: `\u2063later:${randomUUID()}\u2063` };
-		pendingDeliveries.push(delivery);
-		pi.sendUserMessage(`${prompt.text}${delivery.marker}`, { deliverAs: "followUp" });
+	const createMarker = () => {
+		const selectors = [...randomUUID().replaceAll("-", "")]
+			.map((digit) => String.fromCharCode(VARIATION_SELECTOR_START + Number.parseInt(digit, 16)))
+			.join("");
+		return `${MARKER_BOUNDARY}${selectors}${MARKER_BOUNDARY}`;
 	};
+
+	const createDelivery = (prompt: SavedPrompt, idle: boolean): PendingDelivery => {
+		const delivery = { prompt, idle, marker: createMarker() };
+		pendingDeliveries.push(delivery);
+		return delivery;
+	};
+
+	const queueFollowUp = (prompt: SavedPrompt) => {
+		const delivery = createDelivery(prompt, false);
+		pi.sendUserMessage(`${delivery.marker}${prompt.text}`, { deliverAs: "followUp" });
+	};
+
+	const clearDequeuedFollowUps = (ctx: ExtensionContext) => {
+		if (ctx.hasPendingMessages()) return;
+		pendingDeliveries = pendingDeliveries.filter((delivery) => delivery.idle);
+	};
+
+	const reconstructTreeState = (ctx: ExtensionContext) => {
+		const restored = readPrompts(ctx);
+		for (const delivery of pendingDeliveries) {
+			const previousIndex = prompts.indexOf(delivery.prompt);
+			if (previousIndex === -1) continue;
+
+			const occurrence = prompts
+				.slice(0, previousIndex)
+				.filter((prompt) => prompt.text === delivery.prompt.text).length;
+			const replacement = restored.filter((prompt) => prompt.text === delivery.prompt.text)[occurrence];
+			if (replacement !== undefined) delivery.prompt = replacement;
+		}
+		prompts = restored;
+		clearDequeuedFollowUps(ctx);
+	};
+
+	pi.on("session_start", async (_event, ctx) => resetState(ctx));
+	pi.on("session_tree", async (_event, ctx) => reconstructTreeState(ctx));
+	pi.on("agent_settled", async (_event, ctx) => clearDequeuedFollowUps(ctx));
 
 	const truncate = (text: string) => {
 		const singleLine = text.replace(/\s+/g, " ").trim();
@@ -77,18 +123,34 @@ export default function (pi: ExtensionAPI) {
 	pi.on("input", async (event, ctx) => {
 		const delivery = awaitingIdleInput;
 		awaitingIdleInput = undefined;
-		// Any other input invalidates the idle delivery, so its turn cannot
-		// accidentally acknowledge the saved prompt.
-		pendingIdleInput =
-			event.source === "extension" && ctx.isIdle() && delivery?.prompt.text === event.text ? delivery : undefined;
+		const matchesIdleDelivery =
+			event.source === "extension" &&
+			ctx.isIdle() &&
+			delivery !== undefined &&
+			event.text.includes(delivery.marker);
+		if (matchesIdleDelivery) {
+			pendingIdleInputs.push(delivery);
+			latestIdleInput = delivery;
+			return;
+		}
+
+		latestIdleInput = undefined;
+		const matchesFollowUp = pendingDeliveries.some(
+			(pending) => !pending.idle && event.text.includes(pending.marker),
+		);
+		if (!matchesFollowUp) clearDequeuedFollowUps(ctx);
 	});
 
-	pi.on("before_agent_start", async () => {
-		// A transformed idle input is only safe to acknowledge when it was the
-		// sole pending delivery and the input lifecycle identified it.
-		const delivery = pendingIdleInput;
-		pendingIdleInput = undefined;
-		if (pendingDeliveries.length === 1 && delivery?.idle) acknowledge(delivery);
+	pi.on("before_agent_start", async (event, ctx) => {
+		let delivery = pendingIdleInputs.find((pending) => event.prompt.includes(pending.marker));
+		// If another input handler replaced the text, lifecycle order is safe only
+		// while this is the sole idle input waiting to start.
+		if (delivery === undefined && pendingIdleInputs.length === 1 && latestIdleInput === pendingIdleInputs[0]) {
+			delivery = latestIdleInput;
+		}
+		if (delivery !== undefined) acknowledge(delivery);
+		else latestIdleInput = undefined;
+		clearDequeuedFollowUps(ctx);
 	});
 
 	pi.on("message_start", async (event) => {
@@ -96,25 +158,22 @@ export default function (pi: ExtensionAPI) {
 		if (message.role !== "user" || !("content" in message) || !Array.isArray(message.content)) return;
 		const content = message.content;
 
-		const delivery = pendingDeliveries.find((delivery) => {
-			const marker = delivery.marker;
-			return marker !== undefined && content.some((part) => part.type === "text" && part.text.includes(marker));
-		});
-		if (delivery === undefined || delivery.marker === undefined) return;
-		const marker = delivery.marker;
-
-		// sendUserMessage() has no delivery ID for queued follow-ups. The marker
-		// survives queueing, then is removed before the user message is persisted
-		// or sent to the model.
-		message.content = content.map((part) =>
-			part.type === "text" ? { ...part, text: part.text.replace(marker, "") } : part,
+		const deliveries = pendingDeliveries.filter((delivery) =>
+			content.some((part) => part.type === "text" && part.text.includes(delivery.marker)),
 		);
-		acknowledge(delivery);
+
+		// Strip even an orphaned marker so internal tracking never reaches session
+		// history or the model after an extension reload or state reconstruction.
+		message.content = content.map((part) =>
+			part.type === "text" ? { ...part, text: part.text.replace(DELIVERY_MARKER_PATTERN, "") } : part,
+		);
+		for (const delivery of deliveries) acknowledge(delivery);
 	});
 
 	pi.registerCommand("later", {
 		description: "Save a prompt for later, or run a saved prompt",
 		handler: async (args, ctx) => {
+			clearDequeuedFollowUps(ctx);
 			const text = args.trim();
 
 			// /later <prompt>: save it for later
@@ -174,10 +233,9 @@ export default function (pi: ExtensionAPI) {
 				if (ctx.isIdle()) {
 					// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
 					// acknowledges that Pi accepted this idle turn after all preflight checks.
-					const delivery = { prompt, idle: true };
-					pendingDeliveries.push(delivery);
+					const delivery = createDelivery(prompt, true);
 					awaitingIdleInput = delivery;
-					pi.sendUserMessage(prompt.text);
+					pi.sendUserMessage(`${delivery.marker}${prompt.text}`);
 					return;
 				}
 			}

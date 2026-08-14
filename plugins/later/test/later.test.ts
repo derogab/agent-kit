@@ -27,6 +27,7 @@ const setup = (
 	const notifications: Array<{ message: string; level: string }> = [];
 	const selections: Array<{ title: string; labels: string[] }> = [];
 	const sent: Array<{ prompt: string; options?: { deliverAs: "followUp" } }> = [];
+	const pendingMessages: string[] = [];
 	const queuedSelections: Array<string | undefined> = [];
 	let idle = options.idle ?? true;
 
@@ -35,6 +36,7 @@ const setup = (
 	};
 	const ctx = {
 		hasUI: true,
+		hasPendingMessages: () => pendingMessages.length > 0,
 		isIdle: () => idle,
 		model: { provider: "test", id: "model" } as { provider: string; id: string } | undefined,
 		modelRegistry: {
@@ -70,6 +72,7 @@ const setup = (
 		},
 		sendUserMessage: (prompt: string, sendOptions?: { deliverAs: "followUp" }) => {
 			sent.push({ prompt, options: sendOptions });
+			if (sendOptions?.deliverAs === "followUp") pendingMessages.push(prompt);
 		},
 	};
 
@@ -77,6 +80,11 @@ const setup = (
 
 	return {
 		ctx,
+		dequeueFollowUps: () => pendingMessages.splice(0),
+		deliverFollowUp: (text: string) => {
+			const index = pendingMessages.indexOf(text);
+			if (index !== -1) pendingMessages.splice(index, 1);
+		},
 		entries,
 		handlers,
 		notifications,
@@ -95,6 +103,7 @@ const setup = (
 const latestPrompts = (entries: CustomEntry[]) => entries.at(-1)?.data.prompts;
 
 const startUserMessage = async (fixture: ReturnType<typeof setup>, text: string) => {
+	fixture.deliverFollowUp(text);
 	const event = { message: { role: "user", content: [{ type: "text", text }] } };
 	await fixture.handlers.get("message_start")!(event, fixture.ctx);
 	return event;
@@ -102,6 +111,13 @@ const startUserMessage = async (fixture: ReturnType<typeof setup>, text: string)
 
 const submitInput = async (fixture: ReturnType<typeof setup>, text: string, source = "extension") => {
 	await fixture.handlers.get("input")!({ text, source }, fixture.ctx);
+};
+
+const assertHasInvisibleMarker = (sent: string, prompt: string) => {
+	assert.equal(sent.endsWith(prompt), true);
+	const marker = sent.slice(0, -prompt.length);
+	assert.notEqual(marker, "");
+	assert.doesNotMatch(marker, /[\x20-\x7e]/);
 };
 
 test("keeps an idle prompt when no model is selected", async () => {
@@ -161,11 +177,14 @@ test("removes an idle prompt only when Pi accepts the turn", async () => {
 	await fixture.run("run me");
 	await fixture.run("");
 
-	assert.deepEqual(fixture.sent, [{ prompt: "run me", options: undefined }]);
+	assert.equal(fixture.sent.length, 1);
+	assertHasInvisibleMarker(fixture.sent[0].prompt, "run me");
 	assert.deepEqual(latestPrompts(fixture.entries), ["run me"]);
 
-	await submitInput(fixture, "run me");
-	await fixture.handlers.get("before_agent_start")!({ prompt: "run me" }, fixture.ctx);
+	await submitInput(fixture, fixture.sent[0].prompt);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[0].prompt }, fixture.ctx);
+	const event = await startUserMessage(fixture, fixture.sent[0].prompt);
+	assert.equal(event.message.content[0].text, "run me");
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
@@ -174,30 +193,47 @@ test("acknowledges an idle prompt transformed by an input handler", async () => 
 	await fixture.run("original");
 	await fixture.run("");
 
-	await submitInput(fixture, "original");
+	await submitInput(fixture, fixture.sent[0].prompt);
 	await fixture.handlers.get("before_agent_start")!({ prompt: "transformed" }, fixture.ctx);
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
-test("keeps an idle delivery when another delivery is pending", async () => {
+test("acknowledges an idle delivery while a follow-up is pending", async () => {
 	const fixture = setup();
 	await fixture.run("idle prompt");
 	await fixture.run("");
-	await submitInput(fixture, "idle prompt");
+	await submitInput(fixture, fixture.sent[0].prompt);
 	fixture.setIdle(false);
 	await fixture.run("queued prompt");
 	fixture.queueSelection("2. queued prompt");
 	await fixture.run("");
+	await submitInput(fixture, fixture.sent.at(-1)!.prompt);
 
-	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
-	assert.deepEqual(latestPrompts(fixture.entries), ["idle prompt", "queued prompt"]);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[0].prompt }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), ["queued prompt"]);
+});
+
+test("acknowledges overlapping idle deliveries independently", async () => {
+	const fixture = setup();
+	await fixture.run("first");
+	await fixture.run("second");
+	fixture.queueSelection("1. first");
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[0].prompt);
+	fixture.queueSelection("2. second");
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[1].prompt);
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[0].prompt }, fixture.ctx);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[1].prompt }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
 test("keeps an idle delivery when unrelated input starts first", async () => {
 	const fixture = setup();
 	await fixture.run("idle prompt");
 	await fixture.run("");
-	await submitInput(fixture, "idle prompt");
+	await submitInput(fixture, fixture.sent[0].prompt);
 	await submitInput(fixture, "unrelated", "interactive");
 
 	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
@@ -227,7 +263,7 @@ test("queues a prompt when the agent starts during authentication", async () => 
 	await confirmation;
 
 	assert.equal(fixture.sent.length, 1);
-	assert.equal(fixture.sent[0].prompt.startsWith("race-safe prompt\u2063later:"), true);
+	assertHasInvisibleMarker(fixture.sent[0].prompt, "race-safe prompt");
 	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
 	await fixture.handlers.get("before_agent_start")!({ prompt: "unrelated" }, fixture.ctx);
 	assert.deepEqual(latestPrompts(fixture.entries), ["race-safe prompt"]);
@@ -242,7 +278,7 @@ test("removes the selected duplicate follow-up when its turn starts", async () =
 	await fixture.run("");
 
 	assert.equal(fixture.sent.length, 1);
-	assert.equal(fixture.sent[0].prompt.startsWith("A\u2063later:"), true);
+	assertHasInvisibleMarker(fixture.sent[0].prompt, "A");
 	assert.deepEqual(fixture.sent[0].options, { deliverAs: "followUp" });
 	// Queueing the follow-up must not remove the prompt before delivery.
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B", "A"]);
@@ -258,8 +294,8 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	await fixture.run("A");
 	fixture.queueSelection("3. A");
 	await fixture.run("");
-	await submitInput(fixture, "A");
-	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
+	await submitInput(fixture, fixture.sent[0].prompt);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[0].prompt }, fixture.ctx);
 
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
 });
@@ -280,6 +316,51 @@ test("keeps a queued follow-up when a user types the same text", async () => {
 
 	const event = await startUserMessage(fixture, fixture.sent[0].prompt);
 	assert.equal(event.message.content[0].text, "B");
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("keeps and can rerun a follow-up removed from Pi's queue", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("run later");
+	await fixture.run("");
+	fixture.dequeueFollowUps();
+	await fixture.handlers.get("agent_settled")?.({}, fixture.ctx);
+
+	fixture.setIdle(true);
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[1].prompt);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[1].prompt }, fixture.ctx);
+
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("keeps and can rerun a dequeued follow-up after its text is edited", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("run later");
+	await fixture.run("");
+	fixture.dequeueFollowUps();
+	await submitInput(fixture, "edited prompt", "interactive");
+	await startUserMessage(fixture, "edited prompt");
+	assert.deepEqual(latestPrompts(fixture.entries), ["run later"]);
+
+	fixture.setIdle(true);
+	await fixture.run("");
+	await submitInput(fixture, fixture.sent[1].prompt);
+	await fixture.handlers.get("before_agent_start")!({ prompt: fixture.sent[1].prompt }, fixture.ctx);
+
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("keeps follow-up delivery tracking across session tree navigation", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("queued prompt");
+	await fixture.run("");
+	const queued = fixture.sent[0].prompt;
+
+	await fixture.handlers.get("session_tree")!({}, fixture.ctx);
+	const event = await startUserMessage(fixture, queued);
+
+	assert.equal(event.message.content[0].text, "queued prompt");
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
