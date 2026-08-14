@@ -1,19 +1,26 @@
+import { writeFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "later";
 const MAX_LABEL_LENGTH = 80;
 
+interface SavedPrompt {
+	text: string;
+}
+
 export default function (pi: ExtensionAPI) {
 	// Saved prompts, oldest first. Reconstructed from session entries.
-	let prompts: string[] = [];
+	let prompts: SavedPrompt[] = [];
+	let pendingIdleDelivery: SavedPrompt | undefined;
 
 	const reconstructState = (ctx: ExtensionContext) => {
 		prompts = [];
+		pendingIdleDelivery = undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
 				const data = entry.data as { prompts?: string[] } | undefined;
-				// Clone: entries are live references, and prompts is mutated in place later
-				prompts = [...(data?.prompts ?? [])];
+				// Use distinct objects so duplicate prompt text still has stable selection identity.
+				prompts = (data?.prompts ?? []).map((text) => ({ text }));
 			}
 		}
 	};
@@ -22,15 +29,50 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
 	const persist = () => {
-		pi.appendEntry(ENTRY_TYPE, { prompts: [...prompts] });
+		pi.appendEntry(ENTRY_TYPE, { prompts: prompts.map((prompt) => prompt.text) });
 	};
 
-	const toLabel = (prompt: string, index: number) => {
-		const singleLine = prompt.replace(/\s+/g, " ").trim();
+	const remove = (prompt: SavedPrompt) => {
+		const index = prompts.indexOf(prompt);
+		if (index === -1) return;
+
+		prompts.splice(index, 1);
+		persist();
+	};
+
+	const toLabel = (prompt: SavedPrompt, index: number) => {
+		const singleLine = prompt.text.replace(/\s+/g, " ").trim();
 		const truncated =
 			singleLine.length > MAX_LABEL_LENGTH ? `${singleLine.slice(0, MAX_LABEL_LENGTH)}…` : singleLine;
 		return `${index + 1}. ${truncated}`;
 	};
+
+	pi.on("before_agent_start", async (event) => {
+		const prompt = pendingIdleDelivery;
+		if (prompt === undefined || prompt.text !== event.prompt) return;
+
+		pendingIdleDelivery = undefined;
+		remove(prompt);
+	});
+
+	pi.on("session_shutdown", async (event, ctx) => {
+		if (event.reason !== "quit" || prompts.length === 0) return;
+
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		const header = ctx.sessionManager.getHeader();
+		if (sessionFile === undefined || header === null) return;
+
+		const entries = [header, ...ctx.sessionManager.getEntries()];
+		const contents = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+
+		try {
+			// Pi normally creates this file on the first assistant response. On an
+			// earlier graceful exit, create it exclusively so saved prompts survive.
+			writeFileSync(sessionFile, contents, { encoding: "utf8", flag: "wx" });
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+		}
+	});
 
 	pi.registerCommand("later", {
 		description: "Save a prompt for later, or run a saved prompt",
@@ -39,7 +81,7 @@ export default function (pi: ExtensionAPI) {
 
 			// /later <prompt>: save it for later
 			if (text) {
-				prompts.push(text);
+				prompts.push({ text });
 				persist();
 				ctx.ui.notify(`Saved for later (${prompts.length} pending)`, "info");
 				return;
@@ -64,25 +106,28 @@ export default function (pi: ExtensionAPI) {
 			const prompt = prompts[index];
 			if (prompt === undefined) return;
 
-			// Remove only after delivery is accepted, so a failed run keeps the prompt
-			try {
-				if (ctx.isIdle()) {
-					await pi.sendUserMessage(prompt);
-				} else {
-					await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-					ctx.ui.notify("Queued as follow-up", "info");
+			if (ctx.isIdle()) {
+				if (ctx.model === undefined) {
+					ctx.ui.notify("Could not run saved prompt, kept in list: no model selected", "error");
+					return;
 				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Could not run saved prompt, kept in list: ${message}`, "error");
+
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+				if (!auth.ok) {
+					ctx.ui.notify(`Could not run saved prompt, kept in list: ${auth.error}`, "error");
+					return;
+				}
+
+				// ExtensionAPI.sendUserMessage() is fire-and-forget. before_agent_start
+				// acknowledges that Pi accepted this idle turn after all preflight checks.
+				pendingIdleDelivery = prompt;
+				pi.sendUserMessage(prompt.text);
 				return;
 			}
 
-			const removeIndex = prompts.indexOf(prompt);
-			if (removeIndex !== -1) {
-				prompts.splice(removeIndex, 1);
-				persist();
-			}
+			pi.sendUserMessage(prompt.text, { deliverAs: "followUp" });
+			remove(prompt);
+			ctx.ui.notify("Queued as follow-up", "info");
 		},
 	});
 }

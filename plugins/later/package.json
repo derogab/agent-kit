@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Save prompts and run them later in the session",
   "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
   "files": [
     "extensions",
     "README.md"
