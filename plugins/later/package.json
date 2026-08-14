@@ -1,0 +1,32 @@
+{
+  "name": "@derogab/pi-later",
+  "version": "0.1.0",
+  "description": "Save prompts and run them later in the session",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/later"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/later.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
