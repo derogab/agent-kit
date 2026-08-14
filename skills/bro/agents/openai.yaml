@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bro"
+  short_description: "Restate the last message in plain human language"
+  default_prompt: "Use $bro to restate the last message in plain human language, with no jargon."

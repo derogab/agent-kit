@@ -4,6 +4,7 @@ Follows the [Agent Skills](https://agentskills.io) open standard.
 
 | Skill | Description |
 |-------|-------------|
+| [`/bro`](./bro/) | Restate the last message in plain human language, with no jargon |
 | [`/commit`](./commit/) | Create a conventional commit from staged changes |
 | [`/list-issues`](./list-issues/) | Organize and track code issues in a table with stable IDs, types, descriptions, and statuses |
 | [`/pr`](./pr/) | Create or update a pull request for the current branch |
@@ -22,6 +23,7 @@ npx skills add -g derogab/agent-kit
 or symlink the skills you need into your agent's skills folder:
 
 ```bash
+ln -s /path/to/agent-kit/skills/bro ~/path/to/your/agent/skills/bro
 ln -s /path/to/agent-kit/skills/commit ~/path/to/your/agent/skills/commit
 ln -s /path/to/agent-kit/skills/list-issues ~/path/to/your/agent/skills/list-issues
 ln -s /path/to/agent-kit/skills/pr ~/path/to/your/agent/skills/pr
