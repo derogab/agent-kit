@@ -95,18 +95,24 @@ export default function (pi: ExtensionAPI) {
 
 	const reconstructTreeState = (ctx: ExtensionContext) => {
 		const restored = readPrompts(ctx);
+		// Each tracked prompt claims a distinct restored copy so every pending
+		// delivery's acknowledgement still removes its own entry. Deliveries beyond
+		// the restored count keep a stale object and acknowledge as no-ops, and
+		// deliveries sharing one prompt object keep sharing it (one removal total).
+		const available = [...restored];
+		const remapped = new Map<SavedPrompt, SavedPrompt>();
 		for (const delivery of pendingDeliveries) {
-			const previousIndex = prompts.indexOf(delivery.prompt);
-			if (previousIndex === -1) continue;
+			if (!prompts.includes(delivery.prompt)) continue;
 
-			const occurrence = prompts
-				.slice(0, previousIndex)
-				.filter((prompt) => prompt.text === delivery.prompt.text).length;
-			const matches = restored.filter((prompt) => prompt.text === delivery.prompt.text);
-			// Clamp when navigation shrank the duplicate count: a stale object from the
-			// old array would make acknowledgement's identity lookup silently miss.
-			const replacement = matches[occurrence] ?? matches[matches.length - 1];
-			if (replacement !== undefined) delivery.prompt = replacement;
+			let replacement = remapped.get(delivery.prompt);
+			if (replacement === undefined) {
+				const index = available.findIndex((prompt) => prompt.text === delivery.prompt.text);
+				if (index === -1) continue;
+				replacement = available[index];
+				available.splice(index, 1);
+				remapped.set(delivery.prompt, replacement);
+			}
+			delivery.prompt = replacement;
 		}
 		prompts = restored;
 		clearDequeuedFollowUps(ctx);

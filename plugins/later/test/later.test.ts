@@ -415,6 +415,27 @@ test("acknowledges a delivered duplicate after navigating to a branch with fewer
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
+test("acknowledges each pending duplicate distinctly after navigating to fewer copies", async () => {
+	const fixture = setup({ idle: false });
+	await fixture.run("A");
+	await fixture.run("A");
+	await fixture.run("A");
+	fixture.queueSelection("2. A");
+	await fixture.run("");
+	fixture.queueSelection("3. A");
+	await fixture.run("");
+	assert.deepEqual(latestPrompts(fixture.entries), ["A", "A", "A"]);
+
+	// Navigate to the branch point where only two copies were saved.
+	fixture.entries.pop();
+	await fixture.handlers.get("session_tree")!({}, fixture.ctx);
+
+	await startUserMessage(fixture, fixture.sent[0].prompt);
+	assert.deepEqual(latestPrompts(fixture.entries), ["A"]);
+	await startUserMessage(fixture, fixture.sent[1].prompt);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
 test("removes a prompt without running it when Remove is chosen", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("A");
