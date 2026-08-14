@@ -17,4 +17,8 @@ pi install npm:@derogab/pi-later
 - `/later <prompt>`: save a prompt for later.
 - `/later`: open the list of saved prompts. Pick one to send it to the session and run it; the prompt is removed from the list.
 
-Saved prompts are stored in the session, so they survive `/reload`, graceful exit, and session resume.
+After the session's first assistant response, saved prompts survive `/reload` and session resume.
+
+## Limitations
+
+- Pi creates a new session file only after its first assistant response. Prompts saved before that point remain in memory and are lost if Pi exits or replaces the session with `/new`, `/resume`, or `/fork` first.

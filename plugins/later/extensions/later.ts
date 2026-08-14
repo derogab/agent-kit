@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "later";
@@ -47,31 +46,14 @@ export default function (pi: ExtensionAPI) {
 		return `${index + 1}. ${truncated}`;
 	};
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async () => {
 		const prompt = pendingIdleDelivery;
-		if (prompt === undefined || prompt.text !== event.prompt) return;
+		if (prompt === undefined) return;
 
+		// The next accepted idle turn is the pending delivery, even if an input
+		// handler transformed its text before this event.
 		pendingIdleDelivery = undefined;
 		remove(prompt);
-	});
-
-	pi.on("session_shutdown", async (event, ctx) => {
-		if (event.reason !== "quit" || prompts.length === 0) return;
-
-		const sessionFile = ctx.sessionManager.getSessionFile();
-		const header = ctx.sessionManager.getHeader();
-		if (sessionFile === undefined || header === null) return;
-
-		const entries = [header, ...ctx.sessionManager.getEntries()];
-		const contents = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-
-		try {
-			// Pi normally creates this file on the first assistant response. On an
-			// earlier graceful exit, create it exclusively so saved prompts survive.
-			writeFileSync(sessionFile, contents, { encoding: "utf8", flag: "wx" });
-		} catch (error) {
-			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-		}
 	});
 
 	pi.registerCommand("later", {

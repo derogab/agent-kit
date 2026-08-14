@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import later from "../extensions/later.ts";
 
@@ -14,7 +11,7 @@ interface CustomEntry {
 	timestamp: string;
 }
 
-const setup = (options: { idle?: boolean; sessionFile?: string; authError?: string } = {}) => {
+const setup = (options: { idle?: boolean; authError?: string } = {}) => {
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
 	const entries: CustomEntry[] = [];
 	const notifications: Array<{ message: string; level: string }> = [];
@@ -23,9 +20,6 @@ const setup = (options: { idle?: boolean; sessionFile?: string; authError?: stri
 
 	const sessionManager = {
 		getBranch: () => entries,
-		getEntries: () => [...entries],
-		getHeader: () => ({ type: "session", version: 3, id: "session", timestamp: "2026-08-14T00:00:00.000Z", cwd: "/tmp" }),
-		getSessionFile: () => options.sessionFile,
 	};
 	const ctx = {
 		hasUI: true,
@@ -112,6 +106,15 @@ test("removes an idle prompt only when Pi accepts the turn", async () => {
 	assert.deepEqual(latestPrompts(fixture.entries), []);
 });
 
+test("acknowledges an idle prompt transformed by an input handler", async () => {
+	const fixture = setup();
+	await fixture.run("original");
+	await fixture.run("");
+
+	await fixture.handlers.get("before_agent_start")!({ prompt: "transformed" }, fixture.ctx);
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
 test("removes the selected duplicate prompt", async () => {
 	const fixture = setup({ idle: false });
 	await fixture.run("A");
@@ -134,24 +137,4 @@ test("removes the selected duplicate after an idle turn is accepted", async () =
 	await fixture.handlers.get("before_agent_start")!({ prompt: "A" }, fixture.ctx);
 
 	assert.deepEqual(latestPrompts(fixture.entries), ["A", "B"]);
-});
-
-test("writes an unflushed session on graceful exit", async () => {
-	const directory = mkdtempSync(join(tmpdir(), "pi-later-"));
-	const sessionFile = join(directory, "session.jsonl");
-
-	try {
-		const fixture = setup({ sessionFile });
-		await fixture.run("survive exit");
-		await fixture.handlers.get("session_shutdown")!({ reason: "quit" }, fixture.ctx);
-
-		const lines = readFileSync(sessionFile, "utf8")
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line));
-		assert.equal(lines[0].type, "session");
-		assert.deepEqual(lines.at(-1)!.data.prompts, ["survive exit"]);
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-	}
 });
