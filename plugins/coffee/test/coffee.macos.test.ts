@@ -61,13 +61,18 @@ const startHost = async (t: TestContext) => {
 	});
 	await once(host, "message", { signal: AbortSignal.timeout(5_000) });
 
-	const childPid = () => {
-		const pids = childrenOf(host.pid!);
-		for (const pid of pids) caffeinatePids.add(pid);
+	const childPid = async () => {
+		let pids: number[] = [];
+		// The host's ready message does not guarantee caffeinate is discoverable yet.
+		await waitFor(() => {
+			pids = childrenOf(host.pid!);
+			for (const pid of pids) caffeinatePids.add(pid);
+			return pids.length > 0;
+		}, "caffeinate to appear as a child of the host");
 		assert.equal(pids.length, 1, `Expected one caffeinate child. ${stderr}`);
 		return pids[0];
 	};
-	const pid = childPid();
+	const pid = await childPid();
 	await delay(100);
 	assert.ok(running(pid), `caffeinate must stay alive while its host runs. ${stderr}`);
 	return { host, pid, childPid };
@@ -84,7 +89,7 @@ test("macOS: reload replaces the old child without accumulating processes", macO
 	const { host, pid, childPid } = await startHost(t);
 	await send(host, "reload");
 	await waitFor(() => !running(pid), "the old caffeinate to exit");
-	const replacement = childPid();
+	const replacement = await childPid();
 	assert.notEqual(replacement, pid);
 	assert.ok(running(replacement));
 	await send(host, "shutdown");

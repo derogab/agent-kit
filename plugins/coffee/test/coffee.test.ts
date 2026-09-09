@@ -160,6 +160,8 @@ test("reports asynchronous spawn errors without crashing and permits a retry", (
 	assert.deepEqual(children[0].kills, []);
 	instance.start();
 	assert.equal(children.length, 2);
+	instance.stop();
+	assert.deepEqual(children[1].kills, ["SIGTERM"]);
 });
 
 test("reports synchronous spawn failures and permits a retry", (t) => {
@@ -172,6 +174,8 @@ test("reports synchronous spawn failures and permits a retry", (t) => {
 	assert.match(instance.notifications[0].message, /spawn failed/);
 	instance.start();
 	assert.equal(children.length, 1);
+	instance.stop();
+	assert.deepEqual(children[0].kills, ["SIGTERM"]);
 });
 
 for (const [code, signal] of [[1, null], [null, "SIGKILL"]] as const) {
