@@ -1,0 +1,32 @@
+{
+  "name": "@derogab/pi-coffee",
+  "version": "0.1.0",
+  "description": "Keep your Mac and display awake while Pi is running",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/coffee"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/coffee.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
