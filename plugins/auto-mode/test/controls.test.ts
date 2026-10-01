@@ -12,6 +12,7 @@ const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 const STATUS_OPTION = "Status";
 const MODEL_OPTION = "Model";
+const NO_MODEL_OPTION = "No model";
 
 interface RegisteredCommand {
 	description?: string;
@@ -23,7 +24,7 @@ function createHarness(
 	dependencies: AutoModeControlsDependencies = {},
 ) {
 	const savedEnabled: boolean[] = [];
-	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
+	let selectedModel: ClassifierModel | null = DEFAULT_CLASSIFIER_MODEL;
 	let address: string | undefined;
 	let addressListener: ((address: string | undefined) => void) | undefined;
 	const classifierServer: ClassifierServer = {
@@ -189,11 +190,11 @@ test("/auto-mode opens its main menu", async () => {
 });
 
 test("Model shows the default and changes the selected model", async () => {
-	let selectedModel: ClassifierModel | undefined;
+	let selectedModel: ClassifierModel | null = DEFAULT_CLASSIFIER_MODEL;
 	let receivedSignal: AbortSignal | undefined;
 	const abortController = new AbortController();
 	const { command } = createHarness({
-		getModel: () => selectedModel ?? DEFAULT_CLASSIFIER_MODEL,
+		getModel: () => selectedModel,
 		selectModel: async (model, signal) => {
 			selectedModel = model;
 			receivedSignal = signal;
@@ -208,7 +209,7 @@ test("Model shows the default and changes the selected model", async () => {
 	await command.handler("", ui.context);
 
 	assert.equal(ui.menus[1].title, "Classifier model: 0.8B");
-	assert.deepEqual(ui.menus[1].options, CLASSIFIER_MODELS.map((model) => model.size));
+	assert.deepEqual(ui.menus[1].options, [NO_MODEL_OPTION, ...CLASSIFIER_MODELS.map((model) => model.size)]);
 	assert.equal(ui.menus[3].title, "Classifier model: 4B");
 	assert.equal(selectedModel?.size, "4B");
 	assert.equal(receivedSignal, abortController.signal);
@@ -222,10 +223,57 @@ test("Model shows the default and changes the selected model", async () => {
 	}]);
 });
 
+test("No model keeps auto-mode active and shows static-only status", async () => {
+	const { command, controller } = createHarness();
+	const ui = createCommandContext({ selections: [MODEL_OPTION, NO_MODEL_OPTION, MODEL_OPTION] });
+
+	await command.handler("", ui.context);
+	await command.handler("", ui.context);
+
+	assert.equal(controller.isActive(), true);
+	assert.equal(ui.menus[3].title, "Classifier model: No model");
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode muted:· static rules only" });
+	assert.deepEqual(ui.notifications, [{
+		message: "No model selected. Only static policy rules are used.",
+		type: "info",
+	}]);
+});
+
+test("enabling with no model never asks the classifier to start", async () => {
+	let ensureCount = 0;
+	const { command, controller, sessionStartHandler } = createHarness({
+		getModel: () => null,
+		ensureReady: async () => {
+			ensureCount += 1;
+			throw new Error("unexpected classifier start");
+		},
+	}, { loadEnabled: () => false });
+	const ui = createCommandContext({ selections: [STATUS_OPTION, ENABLE_OPTION] });
+
+	await sessionStartHandler({}, ui.context);
+	await command.handler("", ui.context);
+
+	assert.equal(ensureCount, 0);
+	assert.equal(controller.isActive(), true);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode muted:· static rules only" });
+	assert.deepEqual(ui.notifications, [{ message: "Auto-mode is on. Bash commands are checked.", type: "info" }]);
+});
+
+test("cancelling model selection leaves the current model unchanged", async () => {
+	let changes = 0;
+	const { command } = createHarness({ selectModel: async () => { changes += 1; } });
+	const ui = createCommandContext({ selections: [MODEL_OPTION, undefined] });
+
+	await command.handler("", ui.context);
+
+	assert.equal(changes, 0);
+	assert.deepEqual(ui.notifications, []);
+});
+
 test("a failed model switch still refreshes the status", async () => {
 	const fourB = CLASSIFIER_MODELS.find((model) => model.size === "4B");
 	assert.ok(fourB);
-	let selectedModel: ClassifierModel = DEFAULT_CLASSIFIER_MODEL;
+	let selectedModel: ClassifierModel | null = DEFAULT_CLASSIFIER_MODEL;
 	const { command } = createHarness({
 		getModel: () => selectedModel,
 		selectModel: async (model) => {

@@ -22,7 +22,7 @@ beforeEach(() => {
 	rmSync(join(agentDirectory, "auto-mode-settings.json"), { force: true });
 });
 
-test("enabled state survives reloads, restarts, and session changes", async (t) => {
+test("enabled state and no-model selection survive reloads, restarts, and session changes", async (t) => {
 	const settingsPath = join(agentDirectory, "auto-mode-settings.json");
 	let startupAttempts = 0;
 	writeFileSync(join(agentDirectory, "auto-mode.json"), JSON.stringify({ deny: ["^blocked$"] }));
@@ -110,6 +110,24 @@ test("enabled state survives reloads, restarts, and session changes", async (t) 
 	assert.equal(startupAttempts, previousAttempts + 1);
 	assert.match(restarted.status ?? "", /auto-mode/);
 	assert.equal((await restarted.checkCommand()).block, true);
+
+	await restarted.choose("Model", "No model");
+	await restarted.emit("session_shutdown");
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { enabled: true, model: null });
+	const attemptsBeforeStaticOnly = startupAttempts;
+	for (const reason of ["reload", "startup"]) {
+		const staticOnly = createInstance();
+		await staticOnly.emit("session_start", reason);
+		assert.match(staticOnly.status ?? "", /static rules only/);
+		assert.equal((await staticOnly.checkCommand()).block, true);
+		await staticOnly.choose("Status", "Disable auto-mode");
+		assert.equal(await staticOnly.checkCommand(), undefined);
+		await staticOnly.choose("Status", "Enable auto-mode");
+		assert.equal((await staticOnly.checkCommand()).block, true);
+		await staticOnly.emit("session_shutdown");
+		assert.equal(startupAttempts, attemptsBeforeStaticOnly);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { enabled: true, model: null });
+	}
 });
 
 test("the composition root connects the server, controls, and guard", async () => {

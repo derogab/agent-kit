@@ -6,6 +6,7 @@ import type { ClassifierServer } from "./server.ts";
 const STATUS_KEY = "auto-mode";
 const STATUS_OPTION = "Status";
 const MODEL_OPTION = "Model";
+const NO_MODEL_OPTION = "No model";
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 
@@ -34,9 +35,11 @@ export function registerAutoModeControls(
 			return;
 		}
 		const model = classifierServer.getModel();
-		const details = [classifierServer.getAddress(), `${model.repository}:${model.size}`]
-			.filter((detail): detail is string => detail !== undefined)
-			.join(" · ");
+		const details = model
+			? [classifierServer.getAddress(), `${model.repository}:${model.size}`]
+				.filter((detail): detail is string => detail !== undefined)
+				.join(" · ")
+			: "static rules only";
 		ctx.ui.setStatus(
 			STATUS_KEY,
 			`${ctx.ui.theme.fg("success", "auto-mode")} ${ctx.ui.theme.fg("muted", `· ${details}`)}`,
@@ -76,16 +79,21 @@ export function registerAutoModeControls(
 			const section = await ctx.ui.select("Auto-mode", [STATUS_OPTION, MODEL_OPTION], { signal: ctx.signal });
 			if (section === MODEL_OPTION) {
 				const choice = await ctx.ui.select(
-					`Classifier model: ${classifierServer.getModel().size}`,
-					CLASSIFIER_MODELS.map((model) => model.size),
+					`Classifier model: ${classifierServer.getModel()?.size ?? NO_MODEL_OPTION}`,
+					[NO_MODEL_OPTION, ...CLASSIFIER_MODELS.map((model) => model.size)],
 					{ signal: ctx.signal },
 				);
-				const model = CLASSIFIER_MODELS.find((candidate) => candidate.size === choice);
-				if (!model) return;
+				const model = choice === NO_MODEL_OPTION
+					? null
+					: CLASSIFIER_MODELS.find((candidate) => candidate.size === choice);
+				if (model === undefined) return;
 
 				try {
 					await classifierServer.selectModel(model, ctx.signal);
-					ctx.ui.notify(`Classifier model set to ${model.size}.`, "info");
+					ctx.ui.notify(
+						model ? `Classifier model set to ${model.size}.` : "No model selected. Only static policy rules are used.",
+						"info",
+					);
 				} catch (error) {
 					ctx.ui.notify(
 						`Classifier model could not change: ${
@@ -125,7 +133,7 @@ export function registerAutoModeControls(
 
 			setEnabled(ctx, true);
 			try {
-				await classifierServer.ensureReady(ctx.signal);
+				if (classifierServer.getModel()) await classifierServer.ensureReady(ctx.signal);
 				ctx.ui.notify("Auto-mode is on. Bash commands are checked.", "info");
 			} catch (error) {
 				ctx.ui.notify(

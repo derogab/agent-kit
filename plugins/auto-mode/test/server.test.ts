@@ -193,6 +193,92 @@ test("disabled session startup stays idle but can be enabled later", async () =>
 	await harness.sessionShutdown();
 });
 
+test("no model stays idle on startup and can switch to a classifier and back", async (t) => {
+	const children = [new FakeProcess(), new FakeProcess()];
+	let cacheLookups = 0;
+	let spawnCount = 0;
+	const savedModels: Array<ClassifierModel | null> = [];
+	const harness = createHarness({
+		isEnabled: () => true,
+		loadModel: () => null,
+		saveModel: (model) => { savedModels.push(model); },
+		findCachedModel: async () => { cacheLookups += 1; return "/cache/model.gguf"; },
+		findFreePort: async () => 49_152,
+		spawnServer: () => children[spawnCount++] as unknown as ChildProcess,
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+	t.after(() => harness.sessionShutdown());
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	assert.equal(harness.classifierServer.getModel(), null);
+	await assert.rejects(harness.classifierServer.ensureReady(), /no classifier model is selected/);
+	assert.equal(cacheLookups, 0);
+	assert.equal(spawnCount, 0);
+	assert.deepEqual(harness.notifications, []);
+
+	await harness.classifierServer.selectModel(DEFAULT_CLASSIFIER_MODEL);
+	assert.equal(spawnCount, 1);
+	assert.equal(harness.classifierServer.getAddress(), "127.0.0.1:49152");
+
+	await harness.classifierServer.selectModel(null);
+	assert.equal(harness.classifierServer.getModel(), null);
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+	assert.deepEqual(children[0].signals, ["SIGTERM"]);
+	await assert.rejects(harness.classifierServer.ensureReady(), /no classifier model is selected/);
+	assert.equal(cacheLookups, 1);
+
+	await harness.classifierServer.selectModel(CLASSIFIER_MODELS[1]);
+	assert.equal(spawnCount, 2);
+	assert.deepEqual(savedModels, [DEFAULT_CLASSIFIER_MODEL, null, CLASSIFIER_MODELS[1]]);
+});
+
+test("switching from no model while disabled does not start a classifier", async (t) => {
+	let cacheLookups = 0;
+	const harness = createHarness({
+		isEnabled: () => false,
+		loadModel: () => null,
+		findCachedModel: async () => { cacheLookups += 1; throw new Error("unexpected startup"); },
+	});
+	t.after(() => harness.sessionShutdown());
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+
+	await harness.classifierServer.selectModel(DEFAULT_CLASSIFIER_MODEL);
+	assert.equal(harness.classifierServer.getModel(), DEFAULT_CLASSIFIER_MODEL);
+	assert.equal(cacheLookups, 0);
+});
+
+test("selecting no model cancels pending startup without spawning or downloading", async (t) => {
+	let releaseCache!: (path: string) => void;
+	let downloads = 0;
+	let spawns = 0;
+	const harness = createHarness({
+		isEnabled: () => true,
+		findCachedModel: () => new Promise((resolve) => { releaseCache = resolve; }),
+		downloadModel: async () => { downloads += 1; return "/cache/model.gguf"; },
+		spawnServer: () => { spawns += 1; return new FakeProcess() as unknown as ChildProcess; },
+	});
+	t.after(() => harness.sessionShutdown());
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	const readiness = harness.classifierServer.ensureReady();
+
+	await harness.classifierServer.selectModel(null);
+	releaseCache("/cache/model.gguf");
+	await assert.rejects(readiness, /aborted/);
+	assert.equal(harness.classifierServer.getModel(), null);
+	assert.equal(spawns, 0);
+	assert.equal(downloads, 0);
+	assert.deepEqual(harness.notifications, []);
+});
+
+test("a failed no-model preference save leaves the selected model unchanged", async () => {
+	const harness = createHarness({ saveModel: () => { throw new Error("disk full"); } });
+
+	await assert.rejects(harness.classifierServer.selectModel(null), /disk full/);
+
+	assert.equal(harness.classifierServer.getModel(), DEFAULT_CLASSIFIER_MODEL);
+	await harness.sessionShutdown();
+});
+
 test("the server address is published while running and cleared on stop", async () => {
 	const child = new FakeProcess();
 	const harness = createHarness({
@@ -314,7 +400,7 @@ test("selecting a model restarts an active server with that model", async () => 
 	const ports = [49_157, 49_158];
 	const invocations: Array<readonly string[]> = [];
 	const requestedModels: ClassifierModel[] = [];
-	let savedModel: ClassifierModel | undefined;
+	let savedModel: ClassifierModel | null | undefined;
 	const harness = createHarness({
 		findCachedModel: async (model) => {
 			const requestedModel = model ?? DEFAULT_CLASSIFIER_MODEL;
@@ -331,9 +417,9 @@ test("selecting a model restarts an active server with that model", async () => 
 		},
 		fetch: (async () => healthyResponse()) as typeof fetch,
 	});
-	const addressEvents: Array<{ address: string | undefined; model: string }> = [];
+	const addressEvents: Array<{ address: string | undefined; model: string | undefined }> = [];
 	harness.classifierServer.onAddressChange((address) => {
-		addressEvents.push({ address, model: harness.classifierServer.getModel().size });
+		addressEvents.push({ address, model: harness.classifierServer.getModel()?.size });
 	});
 
 	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
@@ -382,9 +468,9 @@ test("a failed model switch still reports the new model without an address", asy
 				? healthyResponse()
 				: new Response(null, { status: 503 })) as typeof fetch,
 	});
-	const addressEvents: Array<{ address: string | undefined; model: string }> = [];
+	const addressEvents: Array<{ address: string | undefined; model: string | undefined }> = [];
 	harness.classifierServer.onAddressChange((address) => {
-		addressEvents.push({ address, model: harness.classifierServer.getModel().size });
+		addressEvents.push({ address, model: harness.classifierServer.getModel()?.size });
 	});
 
 	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);

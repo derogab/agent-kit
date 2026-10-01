@@ -34,8 +34,9 @@ export function saveEnabledPreference(enabled: boolean, path = PREFERENCES_PATH)
 	savePreferences({ enabled }, path);
 }
 
-export function loadClassifierModelPreference(path = PREFERENCES_PATH): ClassifierModel {
+export function loadClassifierModelPreference(path = PREFERENCES_PATH): ClassifierModel | null {
 	const preferences = loadPreferences(path);
+	if (preferences.model === null) return null;
 	return (
 		CLASSIFIER_MODELS.find((model) => model.size === preferences.model) ??
 		DEFAULT_CLASSIFIER_MODEL
@@ -43,8 +44,8 @@ export function loadClassifierModelPreference(path = PREFERENCES_PATH): Classifi
 }
 
 export function saveClassifierModelPreference(
-	model: ClassifierModel,
+	model: ClassifierModel | null,
 	path = PREFERENCES_PATH,
 ): void {
-	savePreferences({ model: model.size }, path);
+	savePreferences({ model: model?.size ?? null }, path);
 }

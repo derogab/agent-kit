@@ -10,9 +10,9 @@ A Pi plugin that adds an optional safety check to Pi's built-in `bash` tool usin
 pi install npm:@derogab/pi-auto-mode
 ```
 
-Install the unified [`llama`](https://llama.app/) CLI and make it available on your `PATH`.
+To use a classifier model, install the unified [`llama`](https://llama.app/) CLI and make it available on your `PATH`.
 Auto-mode starts and maintains `llama serve` in the background on an available local port
-while enabled, downloading the selected model to the Hugging Face cache when needed.
+while enabled with a model selected, downloading the selected model to the Hugging Face cache when needed.
 Concurrent Pi instances share one server per model, keeping a single copy of it in memory;
 the server stops once the last of those instances stops using it.
 
@@ -48,7 +48,10 @@ Create `auto-mode.json` in either or both locations:
 }
 ```
 
-Rules are checked in order: `deny`, `ask`, `allow`, then the classifier. Each rule is a case-sensitive JavaScript regular expression matched as written against the command. Rules from both files are combined. Missing files are ignored; invalid files block commands.
+Rules are checked in order: `deny`, `ask`, `allow`, then the classifier. With **No model** selected,
+unmatched commands require confirmation instead; they are blocked when confirmation is unavailable or declined.
+Each rule is a case-sensitive JavaScript regular expression matched as written against the command.
+Rules from both files are combined. Missing files are ignored; invalid files block commands.
 
 Auto-mode is not a sandbox or a guarantee of safety.
 
