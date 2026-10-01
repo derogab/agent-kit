@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerAutoModeControls } from "../extensions/controls.ts";
+import { registerAutoModeControls, type AutoModeControlsDependencies } from "../extensions/controls.ts";
 import {
 	CLASSIFIER_MODELS,
 	DEFAULT_CLASSIFIER_MODEL,
@@ -20,7 +20,9 @@ interface RegisteredCommand {
 
 function createHarness(
 	overrides: Partial<ClassifierServer> = {},
+	dependencies: AutoModeControlsDependencies = {},
 ) {
+	const savedEnabled: boolean[] = [];
 	let selectedModel = DEFAULT_CLASSIFIER_MODEL;
 	let address: string | undefined;
 	let addressListener: ((address: string | undefined) => void) | undefined;
@@ -50,7 +52,11 @@ function createHarness(
 			assert.equal(name, "auto-mode");
 			command = options;
 		},
-	} as never, classifierServer);
+	} as never, classifierServer, {
+		loadEnabled: () => true,
+		saveEnabled: (enabled) => { savedEnabled.push(enabled); },
+		...dependencies,
+	});
 
 	const sessionStartHandler = handlers.get("session_start");
 	assert.ok(sessionStartHandler);
@@ -59,6 +65,7 @@ function createHarness(
 	return {
 		command,
 		controller,
+		savedEnabled,
 		sessionStartHandler,
 		setAddress(value: string | undefined) {
 			address = value;
@@ -121,6 +128,32 @@ test("the status line shows the selected model when auto-mode is active", async 
 		key: "auto-mode",
 		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
+});
+
+test("a saved disabled preference hides the status and is not overwritten on startup", async () => {
+	const { controller, savedEnabled, sessionStartHandler, setAddress, command } = createHarness({}, {
+		loadEnabled: () => false,
+	});
+	const ui = createCommandContext({ selections: [STATUS_OPTION] });
+
+	await sessionStartHandler({}, ui.context);
+	setAddress("127.0.0.1:49152");
+	await command.handler("", ui.context);
+
+	assert.equal(controller.isActive(), false);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.equal(ui.menus[1].title, "Auto-mode status: disabled");
+	assert.deepEqual(savedEnabled, []);
+});
+
+test("cancelled menus do not save a preference", async () => {
+	const { command, savedEnabled } = createHarness();
+	const ui = createCommandContext({ selections: [undefined, STATUS_OPTION, undefined] });
+
+	await command.handler("", ui.context);
+	await command.handler("", ui.context);
+
+	assert.deepEqual(savedEnabled, []);
 });
 
 test("the status line follows the classifier server address", async () => {
@@ -229,7 +262,7 @@ test("Status shows the current status and actions", async () => {
 test("disabling stops and enabling restarts the classifier server", async () => {
 	let ensureCount = 0;
 	let stopCount = 0;
-	const { command, controller } = createHarness({
+	const { command, controller, savedEnabled } = createHarness({
 		ensureReady: async () => {
 			ensureCount += 1;
 			return "http://127.0.0.1:49152/v1/chat/completions";
@@ -248,12 +281,42 @@ test("disabling stops and enabling restarts the classifier server", async () => 
 	assert.equal(ui.confirmationCount, 0);
 	assert.equal(stopCount, 1);
 	assert.equal(ensureCount, 1);
+	assert.deepEqual(savedEnabled, [false, true]);
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
 		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
+});
+
+test("disabling is remembered even if the classifier cannot stop", async () => {
+	const { command, controller, savedEnabled } = createHarness({
+		stop: async () => { throw new Error("stop failed"); },
+	});
+	const ui = createCommandContext({ selections: [STATUS_OPTION, DISABLE_OPTION] });
+
+	await command.handler("", ui.context);
+
+	assert.equal(controller.isActive(), false);
+	assert.deepEqual(savedEnabled, [false]);
+	assert.match(ui.notifications.at(-1)?.message ?? "", /could not stop: stop failed/);
+});
+
+test("a failed preference save still applies the choice and warns it may reset", async () => {
+	const { command, controller } = createHarness({}, {
+		saveEnabled: () => { throw new Error("disk full"); },
+	});
+	const ui = createCommandContext({ selections: [STATUS_OPTION, DISABLE_OPTION] });
+
+	await command.handler("", ui.context);
+
+	assert.equal(controller.isActive(), false);
+	assert.deepEqual(ui.status, { key: "auto-mode", text: undefined });
+	assert.deepEqual(ui.notifications[0], {
+		message: "Auto-mode status could not be saved and may reset after a reload or restart: disk full",
+		type: "error",
+	});
 });
 
 test("enabling forwards cancellation while waiting for the classifier server", async () => {
@@ -282,7 +345,7 @@ test("enabling forwards cancellation while waiting for the classifier server", a
 });
 
 test("enabling stays active when classifier setup fails", async () => {
-	const { command, controller } = createHarness({
+	const { command, controller, savedEnabled } = createHarness({
 		ensureReady: async () => {
 			throw new Error("server failed");
 		},
@@ -296,6 +359,7 @@ test("enabling stays active when classifier setup fails", async () => {
 		key: "auto-mode",
 		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
+	assert.deepEqual(savedEnabled, [true]);
 	assert.deepEqual(ui.notifications.at(-1), {
 		message: "Auto-mode could not start: server failed",
 		type: "error",

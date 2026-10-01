@@ -162,6 +162,37 @@ test("session startup launches llama serve on the allocated port", async () => {
 	await harness.sessionShutdown();
 });
 
+test("disabled session startup stays idle but can be enabled later", async () => {
+	const child = new FakeProcess();
+	let cacheLookups = 0;
+	let spawnCount = 0;
+	const harness = createHarness({
+		isEnabled: () => false,
+		findCachedModel: async () => {
+			cacheLookups += 1;
+			return "/cache/model.gguf";
+		},
+		findFreePort: async () => 49_152,
+		spawnServer: () => {
+			spawnCount += 1;
+			return child as unknown as ChildProcess;
+		},
+		fetch: (async () => healthyResponse()) as typeof fetch,
+	});
+
+	harness.sessionStart({ type: "session_start", reason: "startup" }, harness.context);
+	await harness.classifierServer.selectModel(CLASSIFIER_MODELS[1]);
+	assert.equal(cacheLookups, 0);
+	assert.equal(spawnCount, 0);
+	assert.equal(harness.classifierServer.getAddress(), undefined);
+	assert.deepEqual(harness.notifications, []);
+
+	assert.equal(await harness.classifierServer.ensureReady(), "http://127.0.0.1:49152/v1/chat/completions");
+	assert.equal(spawnCount, 1);
+
+	await harness.sessionShutdown();
+});
+
 test("the server address is published while running and cleared on stop", async () => {
 	const child = new FakeProcess();
 	const harness = createHarness({

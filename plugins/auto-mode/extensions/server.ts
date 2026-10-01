@@ -34,6 +34,7 @@ export interface ClassifierServerDependencies {
 	findFreePort?: typeof findFreePort;
 	healthCheckIntervalMs?: number;
 	healthCheckTimeoutMs?: number;
+	isEnabled?: () => boolean;
 	isProcessAlive?: (pid: number) => boolean;
 	killProcess?: (pid: number, signal: NodeJS.Signals) => void;
 	listPortListeners?: (port: number) => Promise<number[] | undefined>;
@@ -550,6 +551,7 @@ export function registerClassifierServer(
 	pi.on("session_start", (_event, ctx) => {
 		sessionActive = true;
 		sessionContext = ctx;
+		if (dependencies.isEnabled?.() === false) return;
 		const readiness = ensureReady();
 		const startGeneration = generation;
 		void readiness.catch((error) => {
