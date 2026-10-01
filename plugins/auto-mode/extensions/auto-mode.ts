@@ -17,9 +17,6 @@ export default function (
 	const registration = { claimed: false };
 	pi.events.emit(REGISTRATION_EVENT, registration);
 	if (registration.claimed) return;
-	pi.events.on(REGISTRATION_EVENT, (data) => {
-		(data as { claimed: boolean }).claimed = true;
-	});
 
 	const classifierServer = registerClassifierServer(pi, {
 		...dependencies,
@@ -27,4 +24,9 @@ export default function (
 	});
 	const controller = registerAutoModeControls(pi, classifierServer, dependencies);
 	registerBashGuard(pi, controller, classifierServer);
+
+	// Claim only after synchronous registration succeeds so failed copies cannot block retries.
+	pi.events.on(REGISTRATION_EVENT, (data) => {
+		(data as { claimed: boolean }).claimed = true;
+	});
 }

@@ -54,7 +54,9 @@ function createRuntime() {
 		confirmations,
 		emit,
 		handlers,
-		loadCopy(factory = autoMode) {
+		loadCopy(factory = autoMode, failRegistration?: string) {
+			const copyHandlers: typeof handlers = new Map();
+			const copyCommands: typeof commands = [];
 			// Each copy gets a separate API wrapper over the runtime's shared event bus.
 			factory({
 				events: {
@@ -67,14 +69,21 @@ function createRuntime() {
 					},
 				},
 				on(event: string, handler: (event: any, context: any) => any) {
-					const callbacks = handlers.get(event) ?? [];
+					if (event === failRegistration) throw new Error(`registration failed: ${event}`);
+					const callbacks = copyHandlers.get(event) ?? [];
 					callbacks.push(handler);
-					handlers.set(event, callbacks);
+					copyHandlers.set(event, callbacks);
 				},
 				registerCommand(name: string, options: { handler: (args: string, context: any) => Promise<void> }) {
-					commands.push({ name, handler: options.handler });
+					if (name === failRegistration) throw new Error(`registration failed: ${name}`);
+					copyCommands.push({ name, handler: options.handler });
 				},
 			} as never, { loadModel: () => null });
+			// Pi discards a failed factory's registrations, but not its bus subscriptions.
+			for (const [event, callbacks] of copyHandlers) {
+				handlers.set(event, [...(handlers.get(event) ?? []), ...callbacks]);
+			}
+			commands.push(...copyCommands);
 		},
 		async unload() {
 			await emit("session_shutdown");
@@ -107,6 +116,30 @@ function assertSingleRegistration(runtime: ReturnType<typeof createRuntime>) {
 }
 
 const { default: projectAutoMode } = await import(new URL("../extensions/auto-mode.ts?project", import.meta.url).href);
+
+for (const [stage, registration] of [
+	["classifier server", "session_shutdown"],
+	["controls", "auto-mode"],
+	["Bash guard", "tool_call"],
+]) {
+	test(`a failed ${stage} registration does not prevent a later copy from registering`, async (t) => {
+		const runtime = createRuntime();
+		t.after(() => runtime.unload());
+		writeFileSync(join(agentDirectory, "auto-mode.json"), JSON.stringify({ deny: ["^blocked$"] }));
+		assert.throws(() => runtime.loadCopy(autoMode, registration), /registration failed/);
+		assert.equal(runtime.commands.length, 0);
+		assert.equal(runtime.handlers.size, 0);
+
+		runtime.loadCopy(projectAutoMode);
+		runtime.loadCopy();
+		assertSingleRegistration(runtime);
+		await runtime.emit("session_start", "startup");
+		assert.equal((await runtime.checkCommand("blocked")).block, true);
+		await runtime.choose("Status", "Disable auto-mode");
+		assert.equal(runtime.status, undefined);
+		assert.equal(await runtime.checkCommand("blocked"), undefined);
+	});
+}
 
 test("duplicate copies register one command, server lifecycle, and Bash guard", async (t) => {
 	assert.notEqual(projectAutoMode, autoMode);
