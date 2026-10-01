@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach, type TestContext } from "node:test";
 import { CLASSIFIER_ALIAS } from "../extensions/classifier.ts";
+import { DEFAULT_CLASSIFIER_MODEL } from "../extensions/model.ts";
 import type { ClassifierServer } from "../extensions/server.ts";
 
 const CLASSIFIER_ENDPOINT = "http://127.0.0.1:49152/v1/chat/completions";
@@ -32,9 +33,7 @@ interface RecordedRequest {
 }
 
 function createHarness(
-	classifierServer: Pick<ClassifierServer, "ensureReady"> = {
-		ensureReady: async () => CLASSIFIER_ENDPOINT,
-	},
+	classifierServer: Partial<Pick<ClassifierServer, "ensureReady" | "getModel">> = {},
 ) {
 	let handler: ((event: any, context: any) => Promise<any>) | undefined;
 
@@ -43,7 +42,11 @@ function createHarness(
 			assert.equal(event, "tool_call");
 			handler = callback;
 		},
-	} as never, { isActive: () => true }, classifierServer);
+	} as never, { isActive: () => true }, {
+		ensureReady: async () => CLASSIFIER_ENDPOINT,
+		getModel: () => DEFAULT_CLASSIFIER_MODEL,
+		...classifierServer,
+	});
 
 	assert.ok(handler);
 	return { handler };
@@ -146,6 +149,66 @@ test("policy decisions run before the model with deny, ask, allow precedence", a
 
 	assert.deepEqual(confirmations, ["echo ask"]);
 	assert.equal(requests.length, 0);
+});
+
+test("no model applies static rules and asks about unmatched commands without classification", async (t) => {
+	writeUserConfig({
+		allow: ["^echo (allow|ask|deny)$"],
+		ask: ["^echo (ask|deny)$"],
+		deny: ["^echo deny$"],
+	});
+	const requests = mockClassifier(t, []);
+	let ensureCount = 0;
+	const { handler } = createHarness({
+		getModel: () => null,
+		ensureReady: async () => {
+			ensureCount += 1;
+			throw new Error("unexpected classifier start");
+		},
+	});
+	const confirmations: string[] = [];
+	const context = createContext(createCwd("static-only"), {
+		ui: { confirm: async (_title: string, command: string) => { confirmations.push(command); return true; } },
+	});
+	for (const [command, allowed] of [
+		["echo allow", true], ["echo ask", true], ["echo deny", false], ["echo unmatched", true],
+	] as const) {
+		const event = bashEvent(command);
+		const result = await handler(event, context);
+		assert.equal(result?.block, allowed ? undefined : true, command);
+		assert.equal(Object.getOwnPropertyDescriptor(event.input, "command")?.writable, !allowed);
+	}
+	assert.deepEqual(confirmations, ["echo ask", "echo unmatched"]);
+	assert.equal(ensureCount, 0);
+	assert.equal(requests.length, 0);
+});
+
+test("no model blocks unmatched commands without confirmation and invalid policy files", async () => {
+	const { handler } = createHarness({ getModel: () => null });
+	const cwd = createCwd("static-only-failures");
+	for (const context of [
+		createContext(cwd, { hasUI: false }),
+		createContext(cwd, { ui: { confirm: async () => false } }),
+	]) {
+		assert.deepEqual(await handler(bashEvent("echo unmatched"), context), {
+			block: true,
+			reason: "Blocked because the unmatched command was not confirmed",
+		});
+	}
+	writeUserConfig("invalid JSON");
+	const result = await handler(bashEvent("echo unmatched"), createContext(cwd));
+	assert.equal(result.block, true);
+	assert.match(result.reason, /^Auto mode configuration error:/);
+});
+
+test("no model rejects changes to an unmatched command during confirmation", async () => {
+	const { handler } = createHarness({ getModel: () => null });
+	const event = bashEvent("echo safe");
+	const result = await handler(event, createContext(createCwd("static-only-mutation"), {
+		ui: { confirm: async () => { event.input.command = "echo changed"; return true; } },
+	}));
+	assert.equal(result.block, true);
+	assert.match(result.reason, /command changed while approval was pending/);
 });
 
 test("ask rules fail closed when confirmation is declined or unavailable", async () => {

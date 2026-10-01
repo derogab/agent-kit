@@ -34,6 +34,7 @@ export interface ClassifierServerDependencies {
 	findFreePort?: typeof findFreePort;
 	healthCheckIntervalMs?: number;
 	healthCheckTimeoutMs?: number;
+	isEnabled?: () => boolean;
 	isProcessAlive?: (pid: number) => boolean;
 	killProcess?: (pid: number, signal: NodeJS.Signals) => void;
 	listPortListeners?: (port: number) => Promise<number[] | undefined>;
@@ -47,9 +48,9 @@ export interface ClassifierServerDependencies {
 export interface ClassifierServer {
 	ensureReady(signal?: AbortSignal): Promise<string>;
 	getAddress(): string | undefined;
-	getModel(): ClassifierModel;
+	getModel(): ClassifierModel | null;
 	onAddressChange(listener: (address: string | undefined) => void): () => void;
-	selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void>;
+	selectModel(model: ClassifierModel | null, signal?: AbortSignal): Promise<void>;
 	stop(): Promise<void>;
 }
 
@@ -292,6 +293,7 @@ export function registerClassifierServer(
 
 	async function startServer(currentGeneration: number, signal: AbortSignal): Promise<string> {
 		const model = selectedModel;
+		if (!model) throw new Error("no classifier model is selected");
 		let modelPath = await findCachedModel(model);
 		if (!modelPath) {
 			if (!active || currentGeneration !== generation || signal.aborted) throw abortError();
@@ -529,6 +531,7 @@ export function registerClassifierServer(
 
 	function ensureReady(signal?: AbortSignal): Promise<string> {
 		if (!sessionActive) return Promise.reject(new Error("classifier server session is not active"));
+		if (!selectedModel) return Promise.reject(new Error("no classifier model is selected"));
 		if (!active) {
 			active = true;
 			generation += 1;
@@ -538,18 +541,19 @@ export function registerClassifierServer(
 		return withSignal(start(), signal);
 	}
 
-	async function selectModel(model: ClassifierModel, signal?: AbortSignal): Promise<void> {
-		if (model.size === selectedModel.size) return;
+	async function selectModel(model: ClassifierModel | null, signal?: AbortSignal): Promise<void> {
+		if (model?.size === selectedModel?.size) return;
 		saveModel(model);
-		const restart = active;
+		const restart = sessionActive && (dependencies.isEnabled?.() ?? active);
 		selectedModel = model;
 		await stop();
-		if (restart) await ensureReady(signal);
+		if (restart && model) await ensureReady(signal);
 	}
 
 	pi.on("session_start", (_event, ctx) => {
 		sessionActive = true;
 		sessionContext = ctx;
+		if (dependencies.isEnabled?.() === false || !selectedModel) return;
 		const readiness = ensureReady();
 		const startGeneration = generation;
 		void readiness.catch((error) => {

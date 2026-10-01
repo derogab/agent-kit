@@ -54,7 +54,7 @@ async function confirmCommand(command: string, ctx: ExtensionContext): Promise<b
 export function registerBashGuard(
 	pi: ExtensionAPI,
 	state: AutoModeState,
-	classifierServer: Pick<ClassifierServer, "ensureReady">,
+	classifierServer: Pick<ClassifierServer, "ensureReady" | "getModel">,
 ): void {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event) || !state.isActive()) return;
@@ -70,7 +70,8 @@ export function registerBashGuard(
 			};
 		}
 
-		let decision = policyDecision;
+		const unmatchedWithoutModel = policyDecision === undefined && classifierServer.getModel() === null;
+		let decision = unmatchedWithoutModel ? "ask" : policyDecision;
 		let usedClassifier = false;
 		if (decision === undefined) {
 			usedClassifier = true;
@@ -94,8 +95,9 @@ export function registerBashGuard(
 
 		const allowed = decision === "allow" || (decision === "ask" && (await confirmCommand(command, ctx)));
 		if (!allowed) {
-			const decisionSource =
-				usedClassifier ? "the classifier" : `the ${decision} policy rule`;
+			const decisionSource = usedClassifier
+				? "the classifier"
+				: unmatchedWithoutModel ? "the unmatched command" : `the ${decision} policy rule`;
 			return {
 				block: true,
 				reason: decision === "ask" ? `Blocked because ${decisionSource} was not confirmed` : `Blocked by ${decisionSource}`,

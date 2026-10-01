@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CLASSIFIER_MODELS } from "./model.ts";
+import { loadEnabledPreference, saveEnabledPreference } from "./preferences.ts";
 import type { ClassifierServer } from "./server.ts";
 
 const STATUS_KEY = "auto-mode";
 const STATUS_OPTION = "Status";
 const MODEL_OPTION = "Model";
+const NO_MODEL_OPTION = "No model";
 const ENABLE_OPTION = "Enable auto-mode";
 const DISABLE_OPTION = "Disable auto-mode";
 
@@ -12,11 +14,18 @@ export interface AutoModeController {
 	isActive(): boolean;
 }
 
+export interface AutoModeControlsDependencies {
+	loadEnabled?: typeof loadEnabledPreference;
+	saveEnabled?: typeof saveEnabledPreference;
+}
+
 export function registerAutoModeControls(
 	pi: ExtensionAPI,
 	classifierServer: ClassifierServer,
+	dependencies: AutoModeControlsDependencies = {},
 ): AutoModeController {
-	let active = true;
+	const saveEnabled = dependencies.saveEnabled ?? saveEnabledPreference;
+	let active = (dependencies.loadEnabled ?? loadEnabledPreference)();
 	let sessionContext: ExtensionContext | undefined;
 
 	function updateStatus(ctx: ExtensionContext, enabled: boolean) {
@@ -26,13 +35,27 @@ export function registerAutoModeControls(
 			return;
 		}
 		const model = classifierServer.getModel();
-		const details = [classifierServer.getAddress(), `${model.repository}:${model.size}`]
-			.filter((detail): detail is string => detail !== undefined)
-			.join(" · ");
-		ctx.ui.setStatus(
-			STATUS_KEY,
-			`${ctx.ui.theme.fg("success", "auto-mode")} ${ctx.ui.theme.fg("muted", `· ${details}`)}`,
-		);
+		const details = model
+			? [`${model.repository}:${model.size}`, classifierServer.getAddress()]
+				.filter((detail): detail is string => detail !== undefined)
+				.join(" · ")
+			: "policies only";
+		const shield = model ? ctx.ui.theme.fg("success", "⛨") : "\x1b[38;5;208m⛨\x1b[39m";
+		ctx.ui.setStatus(STATUS_KEY, `${shield} ${ctx.ui.theme.fg("muted", details)}`);
+	}
+
+	function setEnabled(ctx: ExtensionContext, enabled: boolean) {
+		updateStatus(ctx, enabled);
+		try {
+			saveEnabled(enabled);
+		} catch (error) {
+			ctx.ui.notify(
+				`Auto-mode status could not be saved and may reset after a reload or restart: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"error",
+			);
+		}
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -54,16 +77,21 @@ export function registerAutoModeControls(
 			const section = await ctx.ui.select("Auto-mode", [STATUS_OPTION, MODEL_OPTION], { signal: ctx.signal });
 			if (section === MODEL_OPTION) {
 				const choice = await ctx.ui.select(
-					`Classifier model: ${classifierServer.getModel().size}`,
-					CLASSIFIER_MODELS.map((model) => model.size),
+					`Classifier model: ${classifierServer.getModel()?.size ?? NO_MODEL_OPTION}`,
+					[NO_MODEL_OPTION, ...CLASSIFIER_MODELS.map((model) => model.size)],
 					{ signal: ctx.signal },
 				);
-				const model = CLASSIFIER_MODELS.find((candidate) => candidate.size === choice);
-				if (!model) return;
+				const model = choice === NO_MODEL_OPTION
+					? null
+					: CLASSIFIER_MODELS.find((candidate) => candidate.size === choice);
+				if (model === undefined) return;
 
 				try {
 					await classifierServer.selectModel(model, ctx.signal);
-					ctx.ui.notify(`Classifier model set to ${model.size}.`, "info");
+					ctx.ui.notify(
+						model ? `Classifier model set to ${model.size}.` : "No model selected. Only static policy rules are used.",
+						"info",
+					);
 				} catch (error) {
 					ctx.ui.notify(
 						`Classifier model could not change: ${
@@ -85,7 +113,7 @@ export function registerAutoModeControls(
 			);
 			if (choice === undefined) return;
 			if (choice === DISABLE_OPTION) {
-				updateStatus(ctx, false);
+				setEnabled(ctx, false);
 				try {
 					await classifierServer.stop();
 					ctx.ui.notify("Auto-mode is off. Bash commands are no longer checked.", "warning");
@@ -101,12 +129,11 @@ export function registerAutoModeControls(
 			}
 			if (choice !== ENABLE_OPTION) return;
 
+			setEnabled(ctx, true);
 			try {
-				await classifierServer.ensureReady(ctx.signal);
-				updateStatus(ctx, true);
+				if (classifierServer.getModel()) await classifierServer.ensureReady(ctx.signal);
 				ctx.ui.notify("Auto-mode is on. Bash commands are checked.", "info");
 			} catch (error) {
-				updateStatus(ctx, true);
 				ctx.ui.notify(
 					`Auto-mode could not start: ${error instanceof Error ? error.message : String(error)}`,
 					"error",
