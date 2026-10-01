@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "later";
+const REGISTRATION_EVENT = "@derogab/pi-later:registration";
 const MAX_LABEL_LENGTH = 80;
 const ACTION_CONFIRM = "Confirm";
 const ACTION_REMOVE = "Remove";
@@ -20,6 +21,15 @@ interface PendingDelivery {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Separate install paths get separate modules. Coordinate on Pi's shared bus
+	// so only one copy registers; Pi removes the subscription on runtime reload.
+	const registration = { claimed: false };
+	pi.events.emit(REGISTRATION_EVENT, registration);
+	if (registration.claimed) return;
+	pi.events.on(REGISTRATION_EVENT, (data) => {
+		(data as { claimed: boolean }).claimed = true;
+	});
+
 	// Saved prompts, oldest first. Reconstructed from session entries.
 	let prompts: SavedPrompt[] = [];
 	let pendingDeliveries: PendingDelivery[] = [];

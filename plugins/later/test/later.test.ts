@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import later from "../extensions/later.ts";
 
@@ -20,6 +21,9 @@ const setup = (
 	} = {},
 ) => {
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const eventBus = new EventEmitter();
+	const subscriptions: Array<() => void> = [];
+	const commandNames: string[] = [];
 	const entries = (options.initialEntries ?? []).map((entry) => ({
 		...entry,
 		data: { prompts: [...entry.data.prompts] },
@@ -66,8 +70,12 @@ const setup = (
 				timestamp: "2026-08-14T00:00:00.000Z",
 			});
 		},
-		on: (event: string, handler: (event: any, ctx: any) => Promise<void>) => handlers.set(event, handler),
-		registerCommand: (_name: string, definition: { handler: (args: string, ctx: any) => Promise<void> }) => {
+		on: (event: string, handler: (event: any, ctx: any) => Promise<void>) => {
+			assert.equal(handlers.has(event), false, `Duplicate handler for ${event}`);
+			handlers.set(event, handler);
+		},
+		registerCommand: (name: string, definition: { handler: (args: string, ctx: any) => Promise<void> }) => {
+			commandNames.push(name);
 			command = definition.handler;
 		},
 		sendUserMessage: (prompt: string, sendOptions?: { deliverAs: "followUp" }) => {
@@ -76,10 +84,36 @@ const setup = (
 		},
 	};
 
-	later(pi as any);
+	const loadCopy = (factory = later) => {
+		// Pi gives each copy a distinct API wrapper over the same event bus.
+		factory({
+			...pi,
+			events: {
+				emit: (channel: string, data: unknown) => eventBus.emit(channel, data),
+				on: (channel: string, handler: (data: unknown) => void) => {
+					eventBus.on(channel, handler);
+					const unsubscribe = () => {
+						eventBus.off(channel, handler);
+					};
+					subscriptions.push(unsubscribe);
+					return unsubscribe;
+				},
+			},
+		} as any);
+	};
+	loadCopy();
 
 	return {
+		commandNames,
 		ctx,
+		loadCopy,
+		unload: () => {
+			// Runtime invalidation removes subscriptions before loading replacements.
+			for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
+			handlers.clear();
+			commandNames.length = 0;
+			command = undefined;
+		},
 		dequeueFollowUps: () => pendingMessages.splice(0),
 		deliverFollowUp: (text: string) => {
 			const index = pendingMessages.indexOf(text);
@@ -119,6 +153,64 @@ const assertHasInvisibleMarker = (sent: string, prompt: string) => {
 	assert.notEqual(marker, "");
 	assert.doesNotMatch(marker, /[\x20-\x7e]/);
 };
+
+test("registers one command and handler set across separately loaded copies", async () => {
+	const fixture = setup({ idle: false });
+	const handlerCount = fixture.handlers.size;
+	const { default: projectLater } = await import(new URL("../extensions/later.ts?project", import.meta.url).href);
+	assert.notEqual(projectLater, later);
+
+	await fixture.run("first");
+	fixture.loadCopy(projectLater);
+	fixture.loadCopy();
+	assert.deepEqual(fixture.commandNames, ["later"]);
+	assert.equal(fixture.handlers.size, handlerCount);
+
+	await fixture.run("second");
+	assert.deepEqual(latestPrompts(fixture.entries), ["first", "second"]);
+	await fixture.run("");
+	assert.equal(fixture.sent.length, 1);
+	const event = await startUserMessage(fixture, fixture.sent[0].prompt);
+	assert.equal(event.message.content[0].text, "first");
+	assert.deepEqual(latestPrompts(fixture.entries), ["second"]);
+	assert.equal(fixture.entries.length, 3);
+});
+
+test("registers once again after reload and restores the saved list", async () => {
+	const fixture = setup();
+	fixture.loadCopy();
+	await fixture.run("keep me");
+
+	for (let reload = 0; reload < 2; reload++) {
+		fixture.unload();
+		fixture.loadCopy();
+		fixture.loadCopy();
+		assert.deepEqual(fixture.commandNames, ["later"]);
+		await fixture.handlers.get("session_start")!({ reason: "reload" }, fixture.ctx);
+		fixture.queueSelection(undefined);
+		await fixture.run("");
+		assert.deepEqual(fixture.selections.at(-1)?.labels, ["1. keep me"]);
+	}
+
+	fixture.queueSelection("1. keep me");
+	fixture.queueSelection("Remove");
+	await fixture.run("");
+	assert.deepEqual(latestPrompts(fixture.entries), []);
+});
+
+test("keeps separate Pi runtimes independent", async () => {
+	const first = setup();
+	const second = setup();
+	first.loadCopy();
+	second.loadCopy();
+
+	assert.deepEqual(first.commandNames, ["later"]);
+	assert.deepEqual(second.commandNames, ["later"]);
+	await first.run("first session");
+	await second.run("second session");
+	assert.deepEqual(latestPrompts(first.entries), ["first session"]);
+	assert.deepEqual(latestPrompts(second.entries), ["second session"]);
+});
 
 test("keeps an idle prompt when no model is selected", async () => {
 	const fixture = setup();
