@@ -118,7 +118,7 @@ test("enabled state and no-model selection survive reloads, restarts, and sessio
 	for (const reason of ["reload", "startup"]) {
 		const staticOnly = createInstance();
 		await staticOnly.emit("session_start", reason);
-		assert.equal(staticOnly.status, "\x1b[38;5;208m⛨\x1b[39m static only");
+		assert.equal(staticOnly.status, "\x1b[38;5;208m⛨\x1b[39m policies only");
 		assert.equal((await staticOnly.checkCommand()).block, true);
 		await staticOnly.choose("Status", "Disable auto-mode");
 		assert.equal(await staticOnly.checkCommand(), undefined);

@@ -39,7 +39,7 @@ export function registerAutoModeControls(
 			? [`${model.repository}:${model.size}`, classifierServer.getAddress()]
 				.filter((detail): detail is string => detail !== undefined)
 				.join(" · ")
-			: "static only";
+			: "policies only";
 		const shield = model ? ctx.ui.theme.fg("success", "⛨") : "\x1b[38;5;208m⛨\x1b[39m";
 		ctx.ui.setStatus(STATUS_KEY, `${shield} ${ctx.ui.theme.fg("muted", details)}`);
 	}
