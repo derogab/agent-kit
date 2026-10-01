@@ -1,0 +1,32 @@
+{
+  "name": "@derogab/pi-goal",
+  "version": "0.1.0",
+  "description": "Keep Pi working until a goal is reached",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derogab/agent-kit.git",
+    "directory": "plugins/goal"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/goal.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
