@@ -119,7 +119,7 @@ function createCommandContext(options: CommandContextOptions = {}) {
 	};
 }
 
-test("the status line shows the selected model when auto-mode is active", async () => {
+test("the status line shows a text shield and the selected model when auto-mode is active", async () => {
 	const { sessionStartHandler } = createHarness();
 	const ui = createCommandContext();
 
@@ -127,7 +127,7 @@ test("the status line shows the selected model when auto-mode is active", async 
 
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 });
 
@@ -166,14 +166,14 @@ test("the status line follows the classifier server address", async () => {
 
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· 127.0.0.1:49152 · inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B · 127.0.0.1:49152",
 	});
 
 	setAddress(undefined);
 
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 });
 
@@ -215,7 +215,7 @@ test("Model shows the default and changes the selected model", async () => {
 	assert.equal(receivedSignal, abortController.signal);
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
 	});
 	assert.deepEqual(ui.notifications, [{
 		message: "Classifier model set to 4B.",
@@ -232,7 +232,7 @@ test("No model keeps auto-mode active and shows static-only status", async () =>
 
 	assert.equal(controller.isActive(), true);
 	assert.equal(ui.menus[3].title, "Classifier model: No model");
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode muted:· static rules only" });
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "\x1b[38;5;208m⛨\x1b[39m muted:static only" });
 	assert.deepEqual(ui.notifications, [{
 		message: "No model selected. Only static policy rules are used.",
 		type: "info",
@@ -255,7 +255,7 @@ test("enabling with no model never asks the classifier to start", async () => {
 
 	assert.equal(ensureCount, 0);
 	assert.equal(controller.isActive(), true);
-	assert.deepEqual(ui.status, { key: "auto-mode", text: "success:auto-mode muted:· static rules only" });
+	assert.deepEqual(ui.status, { key: "auto-mode", text: "\x1b[38;5;208m⛨\x1b[39m muted:static only" });
 	assert.deepEqual(ui.notifications, [{ message: "Auto-mode is on. Bash commands are checked.", type: "info" }]);
 });
 
@@ -287,7 +287,7 @@ test("a failed model switch still refreshes the status", async () => {
 
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-4B-GGUF:4B",
 	});
 	assert.deepEqual(ui.notifications, [{
 		message: "Classifier model could not change: restart failed",
@@ -333,7 +333,7 @@ test("disabling stops and enabling restarts the classifier server", async () => 
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
@@ -387,7 +387,7 @@ test("enabling forwards cancellation while waiting for the classifier server", a
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 	assert.match(ui.notifications.at(-1)?.message ?? "", /Auto-mode is on/);
 });
@@ -405,7 +405,7 @@ test("enabling stays active when classifier setup fails", async () => {
 	assert.equal(controller.isActive(), true);
 	assert.deepEqual(ui.status, {
 		key: "auto-mode",
-		text: "success:auto-mode muted:· inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
+		text: "success:⛨ muted:inclusionAI/SingGuard-NSFA-0.8B-GGUF:0.8B",
 	});
 	assert.deepEqual(savedEnabled, [true]);
 	assert.deepEqual(ui.notifications.at(-1), {

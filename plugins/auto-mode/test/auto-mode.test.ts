@@ -99,7 +99,7 @@ test("enabled state and no-model selection survive reloads, restarts, and sessio
 	const enabled = createInstance();
 	await enabled.emit("session_start", "startup");
 	await enabled.choose("Status", "Enable auto-mode");
-	assert.match(enabled.status ?? "", /auto-mode/);
+	assert.equal(enabled.status, "⛨ inclusionAI/SingGuard-NSFA-4B-GGUF:4B");
 	assert.equal((await enabled.checkCommand()).block, true);
 	await enabled.emit("session_shutdown");
 	assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).enabled, true);
@@ -108,7 +108,7 @@ test("enabled state and no-model selection survive reloads, restarts, and sessio
 	const previousAttempts = startupAttempts;
 	await restarted.emit("session_start", "startup");
 	assert.equal(startupAttempts, previousAttempts + 1);
-	assert.match(restarted.status ?? "", /auto-mode/);
+	assert.equal(restarted.status, "⛨ inclusionAI/SingGuard-NSFA-4B-GGUF:4B");
 	assert.equal((await restarted.checkCommand()).block, true);
 
 	await restarted.choose("Model", "No model");
@@ -118,7 +118,7 @@ test("enabled state and no-model selection survive reloads, restarts, and sessio
 	for (const reason of ["reload", "startup"]) {
 		const staticOnly = createInstance();
 		await staticOnly.emit("session_start", reason);
-		assert.match(staticOnly.status ?? "", /static rules only/);
+		assert.equal(staticOnly.status, "\x1b[38;5;208m⛨\x1b[39m static only");
 		assert.equal((await staticOnly.checkCommand()).block, true);
 		await staticOnly.choose("Status", "Disable auto-mode");
 		assert.equal(await staticOnly.checkCommand(), undefined);

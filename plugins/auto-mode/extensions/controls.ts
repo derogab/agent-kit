@@ -36,14 +36,12 @@ export function registerAutoModeControls(
 		}
 		const model = classifierServer.getModel();
 		const details = model
-			? [classifierServer.getAddress(), `${model.repository}:${model.size}`]
+			? [`${model.repository}:${model.size}`, classifierServer.getAddress()]
 				.filter((detail): detail is string => detail !== undefined)
 				.join(" · ")
-			: "static rules only";
-		ctx.ui.setStatus(
-			STATUS_KEY,
-			`${ctx.ui.theme.fg("success", "auto-mode")} ${ctx.ui.theme.fg("muted", `· ${details}`)}`,
-		);
+			: "static only";
+		const shield = model ? ctx.ui.theme.fg("success", "⛨") : "\x1b[38;5;208m⛨\x1b[39m";
+		ctx.ui.setStatus(STATUS_KEY, `${shield} ${ctx.ui.theme.fg("muted", details)}`);
 	}
 
 	function setEnabled(ctx: ExtensionContext, enabled: boolean) {
