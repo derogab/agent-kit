@@ -50,6 +50,7 @@ export default function (pi: ExtensionAPI) {
 	let directory = "";
 	let active: Goal | undefined;
 	let started = false;
+	let awaitingSettle = false;
 	let generation = 0;
 	let archives: Array<{ file: string; goal: Goal }> = [];
 
@@ -104,7 +105,10 @@ export default function (pi: ExtensionAPI) {
 
 	const fail = (ctx: ExtensionContext, error: unknown) => {
 		started = false;
-		if (active?.status === "running") active.status = "paused";
+		if (active?.status === "running") {
+			active.status = "paused";
+			try { save(); } catch { /* Keep the original error if storage is still unavailable. */ }
+		}
 		ctx.ui.notify(`Goal paused; check saved state. ${error instanceof Error ? error.message : String(error)}`, "error");
 		showStatus(ctx);
 	};
@@ -177,7 +181,7 @@ export default function (pi: ExtensionAPI) {
 			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
 			// Authentication can yield to cancellation, session changes, or another run.
 			if (active !== goal || goal.status !== "running") return;
-			if (!auth.ok || !ctx.isIdle() || ctx.hasPendingMessages()) {
+			if (!auth.ok || awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
 				pause(ctx);
 				ctx.ui.notify(auth.ok ? "Pi is busy. Use /goal-resume when idle." : `Could not start goal: ${auth.error}`, "warning");
 				return;
@@ -185,28 +189,31 @@ export default function (pi: ExtensionAPI) {
 			started = true;
 			pi.sendUserMessage(prompt(goal));
 		} catch (error) {
-			if (active === goal) {
-				pause(ctx);
-				fail(ctx, error);
-			}
+			if (active === goal) fail(ctx, error);
 		}
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		awaitingSettle = false;
 		pause(ctx);
 		try { load(ctx); } catch (error) { fail(ctx, error); }
 	});
 	pi.on("session_tree", async (_event, ctx) => {
+		awaitingSettle = false;
 		pause(ctx);
 		try { load(ctx); } catch (error) { fail(ctx, error); }
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
+		awaitingSettle = false;
 		generation++;
 		pause(ctx);
 		active = undefined;
 		archives = [];
 		if (ctx.hasUI) ctx.ui.setWidget("goal", undefined);
 	});
+
+	// Pi can report idle before all agent_settled handlers have run.
+	pi.on("agent_start", async () => { awaitingSettle = true; });
 
 	pi.on("agent_before_settle", async (event, ctx) => {
 		if (!started || active?.status !== "running") return;
@@ -247,7 +254,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Aborts can skip the actionable boundary entirely. Never restart from here.
-	pi.on("agent_settled", async (_event, ctx) => { pause(ctx); });
+	pi.on("agent_settled", async (_event, ctx) => {
+		awaitingSettle = false;
+		pause(ctx);
+	});
 
 	pi.registerTool({
 		name: "goal_progress",
@@ -298,7 +308,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Goal stopped and saved. Use /goal-review.", "info");
 				return;
 			}
-			if (active?.status === "running" || !ctx.isIdle() || ctx.hasPendingMessages()) {
+			if (active?.status === "running" || awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
 				ctx.ui.notify("Stop the current goal or wait for Pi to finish first.", "warning");
 				return;
 			}

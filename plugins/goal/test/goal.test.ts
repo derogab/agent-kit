@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -63,7 +64,10 @@ const setup = (options: { cwd?: string; mode?: string } = {}) => {
 		on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
-		sendUserMessage: (text: string) => sent.push(text),
+		sendUserMessage: (text: string) => {
+			sent.push(text);
+			void handlers.get("agent_start")!({ type: "agent_start" }, ctx);
+		},
 	};
 	goal(api as unknown as ExtensionAPI);
 	const emit = (name: string, event: any = {}) => handlers.get(name)!({ type: name, ...event }, ctx);
@@ -237,6 +241,7 @@ for (const mode of ["tui", "rpc"]) {
 		const h = setup({ mode });
 		await h.run("First goal.");
 		await h.boundary([assistant(DONE)]);
+		await h.emit("agent_settled");
 		assert.match(h.render().join("\n"), /1 awaiting review · \/goal-review/);
 		await h.run("Second goal.");
 		assert.match(h.render().join("\n"), /1 awaiting review · \/goal-review/);
@@ -389,6 +394,24 @@ test("Escape pauses even when Pi skips agent_before_settle", async () => {
 	await h.command("goal-resume");
 	assert.equal(h.sent.length, 2);
 });
+
+for (const action of ["done", "stop", "pause"]) {
+	test(`waits for settlement after ${action} before starting another goal run`, async () => {
+		const h = setup();
+		await h.run("First goal.");
+		if (action === "done") await h.boundary([assistant(DONE)]);
+		else await h.command(`goal-${action}`);
+		// Pi becomes idle before dispatching agent_settled; an earlier handler can yield.
+		const restart = () => action === "pause" ? h.command("goal-resume") : h.run("Second goal.");
+		await restart();
+		assert.equal(h.sent.length, 1);
+		await h.emit("agent_settled");
+		await restart();
+		assert.equal(h.sent.length, 2);
+		assert.equal(h.state().status, "running");
+		assert.equal((await h.boundary()).continue, true);
+	});
+}
 
 test("an aborted operation cannot request a continuation", async () => {
 	const h = setup();
@@ -544,8 +567,10 @@ test("review deletes only the selected archive and cannot replace a current goal
 	const h = setup();
 	await h.run("First goal.");
 	await h.command("goal-stop");
+	await h.emit("agent_settled");
 	await h.run("Second goal.");
 	await h.command("goal-stop");
+	await h.emit("agent_settled");
 	await h.run("Third goal.");
 	await h.emit("agent_settled");
 	const before = h.state();
@@ -564,12 +589,14 @@ test("session changes while reviewing cannot delete saved work", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
 	await h.command("goal-stop");
+	await h.emit("agent_settled");
 	let calls = 0;
 	h.ctx.ui.select = async (_title, options) => {
 		if (++calls === 2) await h.emit("session_start");
 		return options[calls === 2 ? 2 : 0];
 	};
 	await h.command("goal-review");
+	assert.equal(calls, 2);
 	assert.equal(h.archived().length, 1);
 });
 
@@ -598,10 +625,48 @@ test("a storage failure stops continuation, keeps the last valid file, and repor
 	assert.equal(h.notifications.at(-1)!.level, "error");
 	assert.match(h.render().join("\n"), /\/goal-review/);
 	// An ended current.json left by a failed move can still be reviewed and deleted.
+	await h.emit("agent_settled");
 	rmSync(h.archiveDir);
 	h.selections.push(0, 2);
 	await h.command("goal-review");
 	assert.equal(existsSync(h.current), false);
+});
+
+test("a transient save failure persists the paused state and reports one error", async (t) => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	const rename = fs.renameSync;
+	let attempts = 0;
+	t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+		if (++attempts === 1) throw new Error("Temporary save failure");
+		return rename(...args);
+	});
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await assert.rejects(h.update(tasks), /Temporary save failure/);
+	assert.equal(h.state().status, "paused");
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.notifications.filter(({ level }) => level === "error").length, 1);
+	assert.match(h.notifications.at(-1)!.message, /Temporary save failure/);
+});
+
+test("a persistent start save failure reports only the original error", async (t) => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.command("goal-pause");
+	await h.emit("agent_settled");
+	let attempts = 0;
+	t.mock.method(fs, "renameSync", () => { throw new Error(`Save failure ${++attempts}`); });
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await h.command("goal-resume");
+	assert.equal(h.sent.length, 1);
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.state().status, "paused");
+	assert.equal(attempts, 2);
+	assert.deepEqual(h.notifications.filter(({ level }) => level === "error").map(({ message }) => message), [
+		"Goal paused; check saved state. Save failure 1",
+	]);
 });
 
 test("a failed progress save pauses without replacing the last valid state", async () => {
@@ -623,6 +688,7 @@ test("queued progress cannot recreate a stopped goal or modify a replacement", a
 	await h.run("First goal.");
 	const updating = assert.rejects(h.update(tasks), /No running goal/);
 	await h.command("goal-stop");
+	await h.emit("agent_settled");
 	await h.run("Second goal.");
 	await updating;
 	assert.deepEqual(h.state().tasks, []);
@@ -634,6 +700,7 @@ test("resuming an archive without a model retains it as a paused current goal", 
 	const h = setup();
 	await h.run("Fix the tests.");
 	await h.command("goal-stop");
+	await h.emit("agent_settled");
 	h.ctx.model = undefined;
 	h.selections.push(0, 1);
 	await h.command("goal-review");
