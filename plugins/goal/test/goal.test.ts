@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { after } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import type {
 	AgentBeforeSettleEvent,
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import goal from "../extensions/goal.ts";
 
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
+const directories: string[] = [];
+after(() => directories.forEach((cwd) => rmSync(cwd, { recursive: true, force: true })));
 
 const assistant = (text: string, stopReason = "stop") => ({
 	role: "assistant",
@@ -17,18 +24,25 @@ const assistant = (text: string, stopReason = "stop") => ({
 	stopReason,
 });
 
-const setup = (hasUI = true) => {
+const setup = (options: { cwd?: string; mode?: string } = {}) => {
+	const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "pi-goal-test-"));
+	if (!options.cwd) directories.push(cwd);
+	const mode = options.mode ?? "tui";
 	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
+	const tools = new Map<string, any>();
 	const sent: string[] = [];
 	const notifications: Array<{ message: string; level: string }> = [];
-	const statuses = new Map<string, string | undefined>();
+	const widgets = new Map<string, any>();
+	const selections: Array<number | undefined> = [];
+	const dialogs: Array<{ title: string; options: string[] }> = [];
 	let idle = true;
 	let pending = false;
 	let aborts = 0;
 	const registry = { getApiKeyAndHeaders: async (): Promise<any> => ({ ok: true, apiKey: "test" }) };
 	const ctx = {
-		hasUI,
+		cwd, mode,
+		hasUI: mode === "tui" || mode === "rpc",
 		model: { id: "test-model" },
 		modelRegistry: registry,
 		signal: undefined,
@@ -37,44 +51,81 @@ const setup = (hasUI = true) => {
 		abort: () => { aborts++; },
 		ui: {
 			notify: (message: string, level: string) => notifications.push({ message, level }),
-			setStatus: (key: string, value: string | undefined) => statuses.set(key, value),
+			setWidget: (key: string, value: any) => widgets.set(key, value),
+			select: async (title: string, options: string[]) => {
+				dialogs.push({ title, options });
+				const index = selections.shift();
+				return index === undefined ? undefined : options[index];
+			},
 		},
 	} as unknown as ExtensionCommandContext;
 	const api = {
 		on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
+		registerTool: (tool: any) => tools.set(tool.name, tool),
 		sendUserMessage: (text: string) => sent.push(text),
 	};
 	goal(api as unknown as ExtensionAPI);
 	const emit = (name: string, event: any = {}) => handlers.get(name)!({ type: name, ...event }, ctx);
 	const boundary = (messages: any[] = [assistant("More work remains.")], overrides: Partial<AgentBeforeSettleEvent> = {}) => emit("agent_before_settle", {
-		entries: [],
-		continue: false,
-		outcome: "completed",
+		entries: [], continue: false, outcome: "completed",
 		context: { contextMessages: messages, pendingMessages: [], canContinue: false },
 		...overrides,
 	});
+	const directory = join(cwd, ".pi", "goals");
+	const current = join(directory, "current.json");
+	const archiveDir = join(directory, "archive");
+	const archived = () => existsSync(archiveDir) ? readdirSync(archiveDir).filter((name) => name.endsWith(".json")).sort() : [];
+	const render = (width = 100, theme = { fg: (_color: string, text: string) => text }): string[] => {
+		const widget = widgets.get("goal");
+		return typeof widget === "function" ? widget({}, theme).render(width) : widget ?? [];
+	};
 	return {
-		ctx, api, registry, commands, sent, notifications, statuses, emit, boundary,
+		ctx, api, registry, commands, tools, sent, notifications, widgets, selections, dialogs, emit, boundary,
+		cwd, directory, current, archiveDir, archived, render,
+		state: () => JSON.parse(readFileSync(current, "utf8")),
+		archive: (index = 0) => JSON.parse(readFileSync(join(archiveDir, archived()[index]), "utf8")),
 		run: (args: string) => commands.get("goal")!.handler(args, ctx),
+		command: (name: string) => commands.get(name)!.handler("", ctx),
+		update: (tasks: Array<{ text: string; done: boolean }>, signal?: AbortSignal) =>
+			tools.get("goal_progress").execute("id", { tasks }, signal, undefined, ctx),
 		busy: () => { idle = false; },
 		queue: () => { pending = true; },
 		aborts: () => aborts,
 	};
 };
 
-test("registers only /goal and does nothing without an explicit goal", async () => {
+const tasks = [{ text: "Fix tests", done: true }, { text: "Run full suite", done: false }];
+
+test("does nothing and creates no files without an explicit goal", async () => {
 	const h = setup();
-	assert.deepEqual([...h.commands.keys()], ["goal"]);
+	assert.deepEqual([...h.commands.keys()], ["goal", "goal-status", "goal-pause", "goal-resume", "goal-stop", "goal-review"]);
+	assert.deepEqual([...h.tools.keys()], ["goal_progress"]);
 	await h.emit("session_start");
 	assert.equal(await h.boundary(), undefined);
 	await h.emit("agent_settled");
 	await h.run("  ");
+	assert.match(h.notifications.at(-1)!.message, /Usage: \/goal <objective>.*\/goal-status/);
+	await h.command("goal-status");
 	assert.match(h.notifications.at(-1)!.message, /No active goal/);
+	for (const name of ["goal-pause", "goal-resume", "goal-stop", "goal-review"]) await h.command(name);
 	assert.equal(h.sent.length, 0);
+	assert.equal(existsSync(h.directory), false);
+	assert.deepEqual(h.render(), []);
+	await assert.rejects(h.update(tasks), /No running goal/);
 });
 
-test("starts a trimmed objective and shows progress without resending on /goal", async () => {
+test("control words are ordinary objectives, not /goal subcommands", async () => {
+	for (const instruction of ["status", "pause", "resume", "stop", "review"]) {
+		const h = setup();
+		await h.run(instruction);
+		assert.equal(h.state().instruction, instruction);
+		assert.equal(h.state().status, "running");
+		assert.equal(h.sent.length, 1);
+	}
+});
+
+test("starts a trimmed objective, saves minimal state and shows the goal above the editor", async () => {
 	const h = setup();
 	await h.run("  Fix all tests\nwithout deleting any.  ");
 	assert.equal(h.sent.length, 1);
@@ -82,13 +133,58 @@ test("starts a trimmed objective and shows progress without resending on /goal",
 	assert.match(h.sent[0], /verify/);
 	assert.match(h.sent[0], /permission/);
 	assert.ok(h.sent[0].includes(DONE) && h.sent[0].includes(BLOCKED));
-	assert.equal(h.statuses.get("goal"), "goal · round 1");
-	await h.run("");
-	assert.match(h.notifications.at(-1)!.message, /Goal \(round 1\): Fix all tests/);
+	assert.deepEqual(h.state(), {
+		instruction: "Fix all tests\nwithout deleting any.", status: "running", round: 1, tasks: [],
+	});
+	assert.match(h.render().join("\n"), /goal · running · 0\/0 tasks done · round 1/);
+	assert.equal(h.render()[0][0], "╭");
+	assert.match(h.render().join("\n"), /\/goal-pause/);
+	await h.command("goal-status");
+	assert.match(h.notifications.at(-1)!.message, /Goal \(running, round 1, 0\/0 tasks done\): Fix all tests/);
 	assert.equal(h.sent.length, 1);
 });
 
-test("continues repeatedly at the boundary while preserving other extensions' entries", async () => {
+test("bare /goal shows usage without changing an existing goal", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	const before = h.state();
+	await h.run("  ");
+	assert.match(h.notifications.at(-1)!.message, /Usage: \/goal <objective>.*\/goal-status/);
+	assert.deepEqual(h.state(), before);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.aborts(), 0);
+});
+
+test("/goal-status reports progress while busy or paused without starting work", async () => {
+	for (const paused of [false, true]) {
+		const h = setup();
+		await h.run("Fix the tests.");
+		await h.update(tasks);
+		if (paused) await h.emit("agent_settled");
+		else { h.busy(); h.queue(); }
+		const before = h.state();
+		await h.command("goal-status");
+		assert.ok(h.notifications.at(-1)!.message.includes(`Goal (${before.status}, round 1, 1/2 tasks done): Fix the tests.`));
+		assert.deepEqual(h.state(), before);
+		assert.equal(h.sent.length, 1);
+		assert.equal(h.aborts(), 0);
+	}
+});
+
+test("checklist updates persist, render and feed the next continuation", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	assert.equal((await h.update(tasks)).content[0].text, "1/2 tasks done");
+	assert.deepEqual(h.state().tasks, tasks);
+	assert.match(h.render().join("\n"), /1\/2 tasks done/);
+	const result = await h.boundary();
+	assert.ok(result.entries[0].content.includes(JSON.stringify(tasks)));
+	assert.deepEqual(readdirSync(h.directory), ["current.json"], "atomic saves leave no temporary files");
+	await assert.rejects(h.update([], AbortSignal.abort()), /No running goal/);
+	assert.deepEqual(h.state().tasks, tasks);
+});
+
+test("continues repeatedly while preserving other extensions' entries", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
 	const existing = { type: "custom" as const, customType: "another-extension", data: {} };
@@ -100,24 +196,60 @@ test("continues repeatedly at the boundary while preserving other extensions' en
 		assert.deepEqual(result.entries[1], {
 			type: "custom_message", customType: "goal", content: h.sent[0], display: false,
 		});
-		assert.equal(h.statuses.get("goal"), `goal · round ${round}`);
+		assert.equal(h.state().round, round);
+		assert.ok(h.render().join("\n").includes(`round ${round}`));
 	}
 	assert.equal(h.sent.length, 1, "continuations must not queue uncancellable follow-ups");
 });
 
-for (const marker of [DONE, BLOCKED]) {
-	test(`stops on the final assistant line ${marker}`, async () => {
-		const h = setup();
-		await h.run("Fix the tests.");
-		assert.equal(await h.boundary([assistant(`Verified the result.\r\n${marker}\n`)]), undefined);
-		assert.equal(h.statuses.get("goal"), undefined);
-		assert.match(h.notifications.at(-1)!.message, marker === DONE ? /Goal reached/ : /Goal blocked/);
-		await h.emit("agent_settled");
-		assert.equal(await h.boundary(), undefined);
-		assert.equal(h.sent.length, 1);
-		assert.equal(h.aborts(), 0);
-	});
-}
+test("completion archives until the user confirms, including across sessions", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.update(tasks);
+	assert.equal(await h.boundary([assistant(`Verified the result.\r\n${DONE}\n`)]), undefined);
+	assert.equal(existsSync(h.current), false);
+	assert.equal(h.archived().length, 1);
+	assert.deepEqual(h.archive(), { instruction: "Fix the tests.", status: "done", round: 1, tasks });
+	await h.emit("agent_settled");
+	assert.equal(await h.boundary(), undefined);
+	assert.match(h.render().join("\n"), /done · awaiting review/);
+	assert.match(h.render().join("\n"), /\/goal-review/);
+	assert.match(h.notifications.at(-1)!.message, /\/goal-review/);
+	assert.equal(h.aborts(), 0);
+	const next = setup({ cwd: h.cwd });
+	await next.emit("session_start");
+	assert.match(next.render().join("\n"), /done · awaiting review/);
+	assert.equal(next.sent.length, 0);
+	for (const action of [undefined, 0]) {
+		next.selections.push(0, action);
+		await next.command("goal-review");
+		assert.equal(next.archived().length, 1, "cancel and Keep must retain the goal");
+	}
+	next.selections.push(0, 2);
+	await next.command("goal-review");
+	assert.equal(next.archived().length, 0);
+	assert.equal(existsSync(next.current), false);
+	assert.deepEqual(next.render(), []);
+});
+
+test("blocked goals retain their checklist and can resume in a fresh session", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.update(tasks);
+	await h.boundary([assistant(`Need permission.\n${BLOCKED}`)]);
+	await h.emit("agent_settled");
+	assert.equal(h.state().status, "blocked");
+	assert.equal(h.archived().length, 0);
+	assert.match(h.render().join("\n"), /blocked/);
+	const next = setup({ cwd: h.cwd });
+	await next.emit("session_start");
+	assert.equal(await next.boundary(), undefined);
+	await next.command("goal-resume");
+	assert.equal(next.state().status, "running");
+	assert.equal(next.sent.length, 1);
+	assert.ok(next.sent[0].includes(JSON.stringify(tasks)));
+	assert.match(next.sent[0], /Check the workspace/);
+});
 
 for (const messages of [
 	[assistant(`Example: ${DONE}`)],
@@ -137,35 +269,100 @@ for (const messages of [
 	});
 }
 
-test("/goal stop clears the loop before aborting and does not abort unrelated work", async () => {
+test("/goal-pause saves progress without archiving and can resume in another session", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
-	await h.run("stop");
+	await h.update(tasks);
+	await h.boundary();
+	const before = h.state();
+	h.busy();
+	h.queue();
+	await h.command("goal-pause");
+	assert.equal(h.aborts(), 1);
+	assert.deepEqual(h.state(), { ...before, status: "paused" });
+	assert.deepEqual(h.archived(), []);
+	assert.equal(await h.boundary([assistant(DONE)]), undefined);
+	assert.match(h.render().join("\n"), /paused/);
+	assert.match(h.notifications.at(-1)!.message, /Goal paused.*\/goal-resume/);
+	await h.emit("agent_settled");
+	await h.command("goal-pause");
+	assert.equal(h.aborts(), 1);
+	assert.equal(h.sent.length, 1);
+	const next = setup({ cwd: h.cwd });
+	await next.emit("session_start");
+	await next.command("goal-resume");
+	assert.deepEqual(next.state(), before);
+	assert.ok(next.sent[0].includes(JSON.stringify(tasks)));
+});
+
+test("/goal-pause never aborts unrelated work or changes a non-running goal", async () => {
+	for (const status of ["none", "paused", "blocked", "done"]) {
+		const h = setup();
+		if (status !== "none") {
+			await h.run("Fix the tests.");
+			if (status === "paused") await h.emit("agent_settled");
+			else await h.boundary([assistant(status === "done" ? DONE : BLOCKED)]);
+		}
+		const before = existsSync(h.current) ? h.state() : undefined;
+		const archives = h.archived();
+		h.busy();
+		await h.command("goal-pause");
+		assert.equal(h.aborts(), 0);
+		assert.deepEqual(existsSync(h.current) ? h.state() : undefined, before);
+		assert.deepEqual(h.archived(), archives);
+		assert.match(h.notifications.at(-1)!.message, /No running goal/);
+	}
+});
+
+test("/goal-pause still aborts on a save failure without claiming progress was saved", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	rmSync(h.current);
+	mkdirSync(h.current);
+	await h.command("goal-pause");
+	assert.equal(h.aborts(), 1);
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.notifications.at(-1)!.level, "error");
+	assert.deepEqual(h.archived(), []);
+	assert.match(h.render().join("\n"), /paused/);
+});
+
+test("/goal-stop archives before aborting and never aborts unrelated work", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.command("goal-stop");
 	assert.equal(h.aborts(), 1);
 	assert.equal(await h.boundary(), undefined);
 	await h.emit("agent_settled");
-	await h.run("stop");
+	await h.command("goal-stop");
 	assert.equal(h.aborts(), 1);
-	assert.equal(h.statuses.get("goal"), undefined);
+	assert.equal(h.archive().status, "stopped");
+	assert.equal(existsSync(h.current), false);
+	await h.run("Try again.");
+	assert.equal(h.sent.length, 2);
+	assert.equal(h.archived().length, 1);
 });
 
 for (const outcome of ["aborted", "error"] as const) {
-	test(`stops on ${outcome} even if the response contains the completion marker`, async () => {
+	test(`pauses on ${outcome} even if the response contains the completion marker`, async () => {
 		const h = setup();
 		await h.run("Fix the tests.");
 		assert.equal(await h.boundary([assistant(DONE)], { outcome }), undefined);
-		assert.match(h.notifications.at(-1)!.message, /stopped before completion/);
+		assert.equal(h.state().status, "paused");
 		assert.equal(await h.boundary(), undefined);
+		assert.equal(h.archived().length, 0);
 	});
 }
 
-test("Escape stops the loop even when Pi skips agent_before_settle", async () => {
+test("Escape pauses even when Pi skips agent_before_settle", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
 	await h.emit("agent_settled");
 	assert.equal(await h.boundary(), undefined);
-	assert.equal(h.statuses.get("goal"), undefined);
-	await h.run("Try again.");
+	assert.equal(h.state().status, "paused");
+	assert.match(h.render().join("\n"), /paused/);
+	assert.match(h.render().join("\n"), /\/goal-resume/);
+	await h.command("goal-resume");
 	assert.equal(h.sent.length, 2);
 });
 
@@ -174,21 +371,39 @@ test("an aborted operation cannot request a continuation", async () => {
 	await h.run("Fix the tests.");
 	h.ctx.signal = AbortSignal.abort();
 	assert.equal(await h.boundary(), undefined);
-	assert.equal(h.statuses.get("goal"), undefined);
+	assert.equal(h.state().status, "paused");
 });
 
 for (const event of ["session_start", "session_tree", "session_shutdown"]) {
-	test(`${event} clears the goal without starting or aborting work`, async () => {
+	test(`${event} saves and pauses without starting or aborting work`, async () => {
 		const h = setup();
 		await h.run("Fix the tests.");
+		await h.update(tasks);
 		await h.emit(event);
 		await h.emit(event);
 		assert.equal(await h.boundary(), undefined);
-		assert.equal(h.statuses.get("goal"), undefined);
+		assert.equal(h.state().status, "paused");
+		assert.deepEqual(h.state().tasks, tasks);
 		assert.equal(h.aborts(), 0);
 		assert.equal(h.sent.length, 1);
 	});
 }
+
+test("a process restart restores running goals paused, never resumes automatically", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.update(tasks);
+	await h.boundary();
+	const next = setup({ cwd: h.cwd });
+	await next.emit("session_start");
+	assert.equal(next.sent.length, 0);
+	assert.match(next.render().join("\n"), /paused/);
+	assert.equal(next.state().status, "paused");
+	await next.command("goal-resume");
+	assert.equal(next.state().round, 2);
+	assert.deepEqual(next.state().tasks, tasks);
+	assert.equal(next.sent.length, 1);
+});
 
 test("does not compete with another continuation or queued user work", async () => {
 	const h = setup();
@@ -196,31 +411,32 @@ test("does not compete with another continuation or queued user work", async () 
 	assert.equal(await h.boundary(undefined, { continue: true }), undefined);
 	h.queue();
 	assert.equal(await h.boundary(), undefined);
-	assert.equal(h.statuses.get("goal"), "goal · round 1");
+	assert.equal(h.state().round, 1);
 });
 
-test("refuses to replace an active goal or start while busy or messages are pending", async () => {
+test("refuses to replace running or paused goals, or start while busy", async () => {
 	const h = setup();
 	await h.run("First goal.");
 	await h.run("Second goal.");
-	await h.run("");
-	assert.match(h.notifications.at(-1)!.message, /First goal/);
+	await h.emit("agent_settled");
+	await h.run("Third goal.");
+	assert.equal(h.state().instruction, "First goal.");
 	assert.equal(h.sent.length, 1);
 	for (const state of ["busy", "queue"] as const) {
 		const busy = setup();
 		busy[state]();
 		await busy.run("Fix the tests.");
 		assert.equal(busy.sent.length, 0);
-		assert.equal(await busy.boundary(), undefined);
+		assert.equal(existsSync(busy.current), false);
 	}
 });
 
-test("missing model or failed authentication leaves no running goal", async () => {
+test("missing model or failed authentication leaves the goal paused and resumable", async () => {
 	const noModel = setup();
 	noModel.ctx.model = undefined;
 	await noModel.run("Fix the tests.");
 	assert.equal(noModel.sent.length, 0);
-	assert.equal(await noModel.boundary(), undefined);
+	assert.equal(noModel.state().status, "paused");
 	for (const throws of [false, true]) {
 		const h = setup();
 		h.registry.getApiKeyAndHeaders = async () => {
@@ -230,22 +446,27 @@ test("missing model or failed authentication leaves no running goal", async () =
 		await h.run("Fix the tests.");
 		assert.equal(h.sent.length, 0);
 		assert.equal(await h.boundary(), undefined);
+		assert.equal(h.state().status, "paused");
 		assert.match(h.notifications.at(-1)!.message, /Authentication failed/);
 	}
 });
 
 test("cancellation or session changes during authentication cannot send a stale goal", async () => {
-	for (const cancel of ["stop", "session_start", "session_tree", "session_shutdown"]) {
+	for (const cancel of ["pause", "stop", "session_start", "session_tree", "session_shutdown"]) {
 		const h = setup();
 		let resolve!: (value: any) => void;
 		h.registry.getApiKeyAndHeaders = () => new Promise((done) => { resolve = done; });
 		const starting = h.run("Fix the tests.");
-		if (cancel === "stop") await h.run("stop");
+		if (cancel === "pause" || cancel === "stop") await h.command(`goal-${cancel}`);
 		else await h.emit(cancel);
 		resolve({ ok: true });
 		await starting;
 		assert.equal(h.sent.length, 0);
 		assert.equal(await h.boundary(), undefined);
+		if (cancel === "pause") {
+			assert.equal(h.state().status, "paused");
+			assert.equal(h.aborts(), 0);
+		}
 	}
 });
 
@@ -260,7 +481,7 @@ test("an unrelated run cannot continue or complete a goal still authenticating",
 	resolve({ ok: true });
 	await starting;
 	assert.equal(h.sent.length, 0);
-	assert.equal(h.statuses.get("goal"), undefined);
+	assert.equal(h.state().status, "paused");
 });
 
 test("rechecks idle state after authentication", async () => {
@@ -269,21 +490,184 @@ test("rechecks idle state after authentication", async () => {
 	await h.run("Fix the tests.");
 	assert.equal(h.sent.length, 0);
 	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.state().status, "paused");
 });
 
-test("send failures clear the goal", async () => {
+test("send failures pause the goal", async () => {
 	const h = setup();
 	h.api.sendUserMessage = () => { throw new Error("Could not send"); };
 	await h.run("Fix the tests.");
 	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.state().status, "paused");
 	assert.match(h.notifications.at(-1)!.message, /Could not send/);
 });
 
-test("loop behavior does not depend on terminal UI", async () => {
-	const h = setup(false);
+test("archived goals can be resumed without losing their checklist", async () => {
+	const h = setup();
 	await h.run("Fix the tests.");
-	assert.equal((await h.boundary()).continue, true);
+	await h.update(tasks);
+	await h.boundary([assistant(DONE)]);
+	const next = setup({ cwd: h.cwd });
+	next.selections.push(0, 1);
+	await next.command("goal-review");
+	assert.equal(next.archived().length, 0);
+	assert.equal(next.state().status, "running");
+	assert.deepEqual(next.state().tasks, tasks);
+	assert.equal(next.sent.length, 1);
+});
+
+test("review deletes only the selected archive and cannot replace a current goal", async () => {
+	const h = setup();
+	await h.run("First goal.");
+	await h.command("goal-stop");
+	await h.run("Second goal.");
+	await h.command("goal-stop");
+	await h.run("Third goal.");
+	await h.emit("agent_settled");
+	const before = h.state();
+	h.selections.push(0, 1);
+	await h.command("goal-review");
+	assert.equal(h.archived().length, 2);
+	assert.deepEqual(h.state(), before);
+	const retained = h.archived()[1];
+	h.selections.push(0, 2);
+	await h.command("goal-review");
+	assert.deepEqual(h.archived(), [retained]);
+	assert.deepEqual(h.state(), before);
+});
+
+test("session changes while reviewing cannot delete saved work", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.command("goal-stop");
+	let calls = 0;
+	h.ctx.ui.select = async (_title, options) => {
+		if (++calls === 2) await h.emit("session_start");
+		return options[calls === 2 ? 2 : 0];
+	};
+	await h.command("goal-review");
+	assert.equal(h.archived().length, 1);
+});
+
+test("invalid saved state is reported and never overwritten", async () => {
+	for (const value of ["{broken", "null", '{"instruction":"hello"}']) {
+		const h = setup();
+		mkdirSync(h.directory, { recursive: true });
+		writeFileSync(h.current, value);
+		await h.emit("session_start");
+		await h.run("New goal.");
+		assert.equal(h.sent.length, 0);
+		assert.equal(readFileSync(h.current, "utf8"), value);
+		assert.equal(h.notifications.at(-1)!.level, "error");
+	}
+});
+
+test("a storage failure stops continuation, keeps the last valid file, and reports an error", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	const before = readFileSync(h.current, "utf8");
+	// Make the archive destination unwritable without depending on chmod or user privileges.
+	writeFileSync(h.archiveDir, "not a directory");
 	await h.boundary([assistant(DONE)]);
 	assert.equal(await h.boundary(), undefined);
-	assert.equal(h.statuses.size, 0);
+	assert.equal(h.state().instruction, JSON.parse(before).instruction);
+	assert.equal(h.notifications.at(-1)!.level, "error");
+	// An ended current.json left by a failed move can still be reviewed and deleted.
+	rmSync(h.archiveDir);
+	h.selections.push(0, 2);
+	await h.command("goal-review");
+	assert.equal(existsSync(h.current), false);
 });
+
+test("a failed progress save pauses without replacing the last valid state", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	const before = readFileSync(h.current, "utf8");
+	rmSync(h.current);
+	mkdirSync(h.current);
+	writeFileSync(join(h.current, "saved.json"), before);
+	await assert.rejects(h.update(tasks));
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.notifications.at(-1)!.level, "error");
+	assert.equal(readFileSync(join(h.current, "saved.json"), "utf8"), before);
+	assert.deepEqual(readdirSync(h.directory), ["current.json"]);
+});
+
+test("queued progress cannot recreate a stopped goal or modify a replacement", async () => {
+	const h = setup();
+	await h.run("First goal.");
+	const updating = assert.rejects(h.update(tasks), /No running goal/);
+	await h.command("goal-stop");
+	await h.run("Second goal.");
+	await updating;
+	assert.deepEqual(h.state().tasks, []);
+	assert.equal(h.state().instruction, "Second goal.");
+	assert.deepEqual(h.archive().tasks, []);
+});
+
+test("resuming an archive without a model retains it as a paused current goal", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.command("goal-stop");
+	h.ctx.model = undefined;
+	h.selections.push(0, 1);
+	await h.command("goal-review");
+	assert.equal(h.archived().length, 0);
+	assert.equal(h.state().status, "paused");
+	assert.equal(h.sent.length, 1);
+});
+
+test("malformed archives are reported and preserved without blocking valid goals", async () => {
+	const h = setup();
+	mkdirSync(h.archiveDir, { recursive: true });
+	const file = join(h.archiveDir, "broken.json");
+	writeFileSync(file, "broken");
+	await h.run("Fix the tests.");
+	assert.equal(h.sent.length, 1);
+	assert.equal(readFileSync(file, "utf8"), "broken");
+	assert.equal(h.notifications[0].level, "warning");
+});
+
+test("saved goals stay isolated to their project directory", async () => {
+	const first = setup();
+	const second = setup();
+	await first.run("First project's goal.");
+	await second.emit("session_start");
+	assert.deepEqual(second.render(), []);
+	await second.run("Second project's goal.");
+	assert.equal(first.state().instruction, "First project's goal.");
+	assert.equal(second.state().instruction, "Second project's goal.");
+});
+
+test("the box fits narrow widths, multiline objectives, Unicode and theme changes", async () => {
+	const h = setup();
+	await h.run("Fix 界 👩‍💻 é\nthen verify\twithout \x1b[31mcontrol codes");
+	await h.update(tasks);
+	for (const width of [0, 1, 2, 3, 4, 5, 10, 40, 100]) {
+		for (const line of h.render(width)) {
+			assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
+			assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripVTControlCharacters(line)));
+		}
+	}
+	const widget = h.widgets.get("goal");
+	let changed = false;
+	const component = widget({}, { fg: (_color: string, text: string) => changed ? text.toUpperCase() : text });
+	assert.match(component.render(100).join("\n"), /goal/);
+	changed = true;
+	component.invalidate();
+	assert.match(component.render(100).join("\n"), /GOAL/);
+});
+
+for (const mode of ["rpc", "json"]) {
+	test(`loop behavior works in ${mode} mode without terminal components`, async () => {
+		const h = setup({ mode });
+		await h.run("Fix the tests.");
+		await h.update(tasks);
+		assert.equal((await h.boundary()).continue, true);
+		await h.boundary([assistant(DONE)]);
+		assert.equal(await h.boundary(), undefined);
+		assert.equal(h.archive().status, "done");
+		if (mode === "rpc") assert.ok(Array.isArray(h.widgets.get("goal")));
+		else assert.equal(h.widgets.size, 0);
+	});
+}
