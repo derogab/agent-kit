@@ -18,7 +18,7 @@ pi install npm:@derogab/pi-goal
 - `/goal-status`: show the current goal and progress.
 - `/goal-pause`: pause the goal, abort its work, and keep it saved for later.
 - `/goal-resume`: continue the saved goal.
-- `/goal-stop`: stop the goal, abort its work, and archive it for review.
+- `/goal-stop`: stop the goal, abort its work, and archive it.
 - `/goal-review`: resume, keep, or confirm and delete ended goals.
 
 For example:
