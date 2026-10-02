@@ -232,6 +232,30 @@ test("completion archives until the user confirms, including across sessions", a
 	assert.deepEqual(next.render(), []);
 });
 
+for (const mode of ["tui", "rpc"]) {
+	test(`review count remains visible with only archived goals in ${mode} mode`, async () => {
+		const h = setup({ mode });
+		await h.run("First goal.");
+		await h.boundary([assistant(DONE)]);
+		assert.match(h.render().join("\n"), /1 awaiting review · \/goal-review/);
+		await h.run("Second goal.");
+		assert.match(h.render().join("\n"), /1 awaiting review · \/goal-review/);
+		await h.command("goal-stop");
+		assert.equal(existsSync(h.current), false);
+		assert.match(h.render().join("\n"), /2 awaiting review · \/goal-review/);
+
+		const next = setup({ cwd: h.cwd, mode });
+		await next.emit("session_start");
+		assert.match(next.render().join("\n"), /2 awaiting review · \/goal-review/);
+		next.selections.push(0, 2);
+		await next.command("goal-review");
+		assert.match(next.render().join("\n"), /1 awaiting review · \/goal-review/);
+		next.selections.push(0, 2);
+		await next.command("goal-review");
+		assert.deepEqual(next.render(), []);
+	});
+}
+
 test("blocked goals retain their checklist and can resume in a fresh session", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
@@ -572,6 +596,7 @@ test("a storage failure stops continuation, keeps the last valid file, and repor
 	assert.equal(await h.boundary(), undefined);
 	assert.equal(h.state().instruction, JSON.parse(before).instruction);
 	assert.equal(h.notifications.at(-1)!.level, "error");
+	assert.match(h.render().join("\n"), /\/goal-review/);
 	// An ended current.json left by a failed move can still be reviewed and deleted.
 	rmSync(h.archiveDir);
 	h.selections.push(0, 2);

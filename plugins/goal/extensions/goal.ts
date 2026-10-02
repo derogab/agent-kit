@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 		const lines = [
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
-			ended(goal) ? "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
+			ended(goal) ? review || "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
 		];
 		if (ctx.mode !== "tui") {
 			ctx.ui.setWidget("goal", lines);
