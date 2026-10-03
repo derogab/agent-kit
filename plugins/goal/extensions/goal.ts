@@ -79,6 +79,7 @@ export default function (pi: ExtensionAPI) {
 		const lines = [
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
+			...goal.tasks.map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
 			ended(goal) ? review || "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
 		];
 		if (ctx.mode !== "tui") {

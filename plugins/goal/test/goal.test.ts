@@ -188,6 +188,32 @@ test("checklist updates persist, render and feed the next continuation", async (
 	assert.deepEqual(h.state().tasks, tasks);
 });
 
+test("checklist rows stay compact, update their markers and survive pause and archive reloads", async () => {
+	for (const mode of ["tui", "rpc"]) {
+		const h = setup({ mode });
+		const rows = (h: ReturnType<typeof setup>) => h.render().map((line) => line.replace(/^│ | │$/g, "").trimEnd());
+		await h.run("Fix the tests.");
+		assert.equal(h.render().length, mode === "tui" ? 5 : 3, "empty checklists add no rows");
+		await h.update(tasks);
+		assert.deepEqual(rows(h).slice(mode === "tui" ? 3 : 2, mode === "tui" ? 5 : 4), ["✓ Fix tests", "· Run full suite"]);
+		await h.update(tasks.map((task) => ({ ...task, done: true })));
+		assert.ok(rows(h).includes("✓ Run full suite"));
+		assert.ok(!rows(h).includes("· Run full suite"));
+		await h.update([]);
+		assert.equal(h.render().length, mode === "tui" ? 5 : 3);
+		await h.update(tasks);
+		await h.command("goal-pause");
+		const next = setup({ cwd: h.cwd, mode });
+		await next.emit("session_start");
+		assert.ok(rows(next).includes("✓ Fix tests") && rows(next).includes("· Run full suite"));
+		await next.command("goal-resume");
+		await next.boundary([assistant(DONE)]);
+		const archived = setup({ cwd: h.cwd, mode });
+		await archived.emit("session_start");
+		assert.ok(rows(archived).includes("✓ Fix tests") && rows(archived).includes("· Run full suite"));
+	}
+});
+
 test("continues repeatedly while preserving other extensions' entries", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
@@ -734,7 +760,8 @@ test("saved goals stay isolated to their project directory", async () => {
 test("the box fits narrow widths, multiline objectives, Unicode and theme changes", async () => {
 	const h = setup();
 	await h.run("Fix 界 👩‍💻 é\nthen verify\twithout \x1b[31mcontrol codes");
-	await h.update(tasks);
+	await h.update([{ text: "Check 界 👩‍💻 é\nthen verify\twithout \x1b[31mcontrol codes", done: false }]);
+	assert.match(h.render().join("\n"), /· Check 界 👩‍💻 é then verify without control codes/);
 	for (const width of [0, 1, 2, 3, 4, 5, 10, 40, 100]) {
 		for (const line of h.render(width)) {
 			assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
