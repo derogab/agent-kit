@@ -188,6 +188,64 @@ test("checklist updates persist, render and feed the next continuation", async (
 	assert.deepEqual(h.state().tasks, tasks);
 });
 
+test("checklist rows stay compact, update their markers and survive pause and archive reloads", async () => {
+	for (const mode of ["tui", "rpc"]) {
+		const h = setup({ mode });
+		const rows = (h: ReturnType<typeof setup>) => h.render().map((line) => line.replace(/^│ | │$/g, "").trimEnd());
+		await h.run("Fix the tests.");
+		assert.equal(h.render().length, mode === "tui" ? 5 : 3, "empty checklists add no rows");
+		await h.update(tasks);
+		assert.deepEqual(rows(h).slice(mode === "tui" ? 3 : 2, mode === "tui" ? 5 : 4), ["✓ Fix tests", "· Run full suite"]);
+		await h.update(tasks.map((task) => ({ ...task, done: true })));
+		assert.ok(rows(h).includes("✓ Run full suite"));
+		assert.ok(!rows(h).includes("· Run full suite"));
+		await h.update([]);
+		assert.equal(h.render().length, mode === "tui" ? 5 : 3);
+		await h.update(tasks);
+		await h.command("goal-pause");
+		const next = setup({ cwd: h.cwd, mode });
+		await next.emit("session_start");
+		assert.ok(rows(next).includes("✓ Fix tests") && rows(next).includes("· Run full suite"));
+		await next.command("goal-resume");
+		await next.boundary([assistant(DONE)]);
+		const archived = setup({ cwd: h.cwd, mode });
+		await archived.emit("session_start");
+		assert.ok(rows(archived).includes("✓ Fix tests") && rows(archived).includes("· Run full suite"));
+	}
+});
+
+test("large checklists have a bounded preview without losing saved or resumed tasks", async () => {
+	for (const mode of ["tui", "rpc"]) {
+		const h = setup({ mode });
+		await h.run("Complete every task.");
+		let checklist: Array<{ text: string; done: boolean }> = [];
+		for (const count of [0, 10, 11, 100]) {
+			checklist = Array.from({ length: count }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
+			await h.update(checklist);
+			const lines = h.render();
+			assert.equal(lines.length, (mode === "tui" ? 5 : 3) + Math.min(count, 10) + Number(count > 10));
+			assert.equal(lines.filter((line) => /[·✓] Task /.test(line)).length, Math.min(count, 10));
+			assert.equal(lines.some((line) => line.includes(" more")), count > 10);
+			if (count > 10) assert.ok(lines.some((line) => line.includes(`… ${count - 10} more`)));
+			assert.ok(!lines.some((line) => line.includes("Task 11")));
+			assert.deepEqual(h.state().tasks, checklist);
+			assert.ok((await h.boundary()).entries[0].content.includes(JSON.stringify(checklist)));
+		}
+		await h.command("goal-pause");
+		const next = setup({ cwd: h.cwd, mode });
+		await next.emit("session_start");
+		assert.ok(next.render().some((line) => line.includes("… 90 more")));
+		await next.command("goal-resume");
+		assert.ok(next.sent[0].includes(JSON.stringify(checklist)));
+		await next.boundary([assistant(DONE)]);
+		assert.deepEqual(next.archive().tasks, checklist);
+		const archived = setup({ cwd: h.cwd, mode });
+		await archived.emit("session_start");
+		assert.equal(archived.render().length, mode === "tui" ? 16 : 14);
+		assert.ok(archived.render().some((line) => line.includes("… 90 more")));
+	}
+});
+
 test("continues repeatedly while preserving other extensions' entries", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
@@ -734,7 +792,8 @@ test("saved goals stay isolated to their project directory", async () => {
 test("the box fits narrow widths, multiline objectives, Unicode and theme changes", async () => {
 	const h = setup();
 	await h.run("Fix 界 👩‍💻 é\nthen verify\twithout \x1b[31mcontrol codes");
-	await h.update(tasks);
+	await h.update([{ text: "Check 界 👩‍💻 é\nthen verify\twithout \x1b[31mcontrol codes", done: false }]);
+	assert.match(h.render().join("\n"), /· Check 界 👩‍💻 é then verify without control codes/);
 	for (const width of [0, 1, 2, 3, 4, 5, 10, 40, 100]) {
 		for (const line of h.render(width)) {
 			assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);

@@ -27,7 +27,7 @@ For example:
 /goal Fix the failing tests without skipping or removing any, then run the full suite to verify.
 ```
 
-Pi keeps working and checking its progress until it reports completion or a blocker that needs your input. A small box above the editor shows the objective, status, completed-task count, and round. The agent maintains a short checklist as it works. Normal tool permissions still apply.
+Pi keeps working and checking its progress until it reports completion or a blocker that needs your input. A small box above the editor shows the objective, status, completed-task count, round, and checklist. The first ten tasks appear on compact lines: `·` for pending and `✓` for completed. Longer checklists show an omitted-task count; the full checklist stays saved. The agent updates the checklist as it works. Normal tool permissions still apply.
 
 Pressing <kbd>Esc</kbd>, errors, session changes, tree navigation, and `/reload` pause the goal without losing saved progress. In another session, run `/goal-resume` from the same project directory. Goals never resume automatically.
 
