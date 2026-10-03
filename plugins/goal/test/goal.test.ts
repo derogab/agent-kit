@@ -214,6 +214,38 @@ test("checklist rows stay compact, update their markers and survive pause and ar
 	}
 });
 
+test("large checklists have a bounded preview without losing saved or resumed tasks", async () => {
+	for (const mode of ["tui", "rpc"]) {
+		const h = setup({ mode });
+		await h.run("Complete every task.");
+		let checklist: Array<{ text: string; done: boolean }> = [];
+		for (const count of [0, 10, 11, 100]) {
+			checklist = Array.from({ length: count }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
+			await h.update(checklist);
+			const lines = h.render();
+			assert.equal(lines.length, (mode === "tui" ? 5 : 3) + Math.min(count, 10) + Number(count > 10));
+			assert.equal(lines.filter((line) => /[·✓] Task /.test(line)).length, Math.min(count, 10));
+			assert.equal(lines.some((line) => line.includes(" more")), count > 10);
+			if (count > 10) assert.ok(lines.some((line) => line.includes(`… ${count - 10} more`)));
+			assert.ok(!lines.some((line) => line.includes("Task 11")));
+			assert.deepEqual(h.state().tasks, checklist);
+			assert.ok((await h.boundary()).entries[0].content.includes(JSON.stringify(checklist)));
+		}
+		await h.command("goal-pause");
+		const next = setup({ cwd: h.cwd, mode });
+		await next.emit("session_start");
+		assert.ok(next.render().some((line) => line.includes("… 90 more")));
+		await next.command("goal-resume");
+		assert.ok(next.sent[0].includes(JSON.stringify(checklist)));
+		await next.boundary([assistant(DONE)]);
+		assert.deepEqual(next.archive().tasks, checklist);
+		const archived = setup({ cwd: h.cwd, mode });
+		await archived.emit("session_start");
+		assert.equal(archived.render().length, mode === "tui" ? 16 : 14);
+		assert.ok(archived.render().some((line) => line.includes("… 90 more")));
+	}
+});
+
 test("continues repeatedly while preserving other extensions' entries", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");

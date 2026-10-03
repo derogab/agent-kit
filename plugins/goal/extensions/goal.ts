@@ -8,6 +8,7 @@ import { Type } from "typebox";
 
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
+const MAX_VISIBLE_TASKS = 10;
 
 interface Goal {
 	instruction: string;
@@ -79,7 +80,8 @@ export default function (pi: ExtensionAPI) {
 		const lines = [
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
-			...goal.tasks.map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
+			...goal.tasks.slice(0, MAX_VISIBLE_TASKS).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
+			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more`] : []),
 			ended(goal) ? review || "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
 		];
 		if (ctx.mode !== "tui") {
