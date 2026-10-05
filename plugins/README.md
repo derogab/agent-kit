@@ -11,6 +11,7 @@
 | [goal](./goal/) | Pi | Keeps working until a goal is reached |
 | [inkypal](./inkypal/) | Claude Code | Notifies InkyPal when a task finish |
 | [later](./later/) | Pi | Save prompts and run them later in the session |
+| [schedule](./schedule/) | Pi | Schedule future and recurring tasks |
 | [sounds](./sounds/) | Claude Code | OS-native sound alerts on events like task completion |
 
 ## Install
@@ -30,6 +31,7 @@ pi install npm:@derogab/pi-exit
 pi install npm:@derogab/pi-git
 pi install npm:@derogab/pi-goal
 pi install npm:@derogab/pi-later
+pi install npm:@derogab/pi-schedule
 ```
 
 ### Claude Code
