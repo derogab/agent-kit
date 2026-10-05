@@ -93,7 +93,7 @@ test("direct timed commands persist without a model and preserve complete task t
 	assert.equal(state[0].prompt, "Run npm test\nthen summarize failures");
 	assert.equal(state[1].intervalMs, 5_400_000);
 	assert.equal(state[2].nextRun, NOW + 7 * 3_600_000);
-	assert.match(h.statuses.get("schedule")!, /3 active/);
+	assert.equal(h.statuses.get("schedule"), "⏲ schedule: 3 active · 3 saved");
 	await h.run("in 0s Not saved");
 	await h.run("at 2030-01-01T00:00Z Already past");
 	assert.equal(h.state().length, 3);

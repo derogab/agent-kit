@@ -73,7 +73,7 @@ export default function (pi: ExtensionAPI) {
 	const showStatus = () => {
 		if (!context?.hasUI) return;
 		const active = schedules.filter((item) => !item.paused).length;
-		context.ui.setStatus("schedule", schedules.length ? `schedule: ${active} active · ${schedules.length} saved` : undefined);
+		context.ui.setStatus("schedule", schedules.length ? `⏲ schedule: ${active} active · ${schedules.length} saved` : undefined);
 	};
 	const save = (next: Schedule[]) => {
 		pi.appendEntry(ENTRY_TYPE, { schedules: next });

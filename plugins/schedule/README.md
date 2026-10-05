@@ -30,7 +30,7 @@ Durations accept seconds, minutes, hours, days, and weeks (`s`, `m`, `h`, `d`, `
 
 You can also ask normally, for example: “In 20 minutes, remind me to check the deployment.” Pi is instructed to use the `schedule` tool for future tasks and reminders without needing `/schedule`. The tool also supports listing, pausing, resuming, and removing schedules. Automatic interpretation depends on the model; a request is only saved after the tool succeeds.
 
-The footer shows the number of active and saved schedules. Due tasks wait until Pi is idle and has no pending messages, then run as ordinary prompts with the current model and normal tool permissions. Shell commands should be expressed as task prompts, such as `/schedule in 5m Run npm test`; the plugin does not bypass Pi to execute shell commands directly.
+The footer shows `⏲ schedule:` with the number of active and saved schedules. Due tasks wait until Pi is idle and has no pending messages, then run as ordinary prompts with the current model and normal tool permissions. Shell commands should be expressed as task prompts, such as `/schedule in 5m Run npm test`; the plugin does not bypass Pi to execute shell commands directly.
 
 ## Persistence and limitations
 
