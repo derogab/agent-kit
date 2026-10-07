@@ -9,6 +9,7 @@ import { Type } from "typebox";
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
 const MAX_VISIBLE_TASKS = 10;
+const REGISTRATION_EVENT = "@derogab/pi-goal:registration";
 
 interface Goal {
 	instruction: string;
@@ -48,6 +49,11 @@ Otherwise, keep working. Never claim success without evidence or bypass permissi
 Only the user may confirm completion or delete saved goals. Do not edit .pi/goals directly.`;
 
 export default function (pi: ExtensionAPI) {
+	// Separate install paths share Pi's bus; subscriptions are removed on runtime reload.
+	const registration = { claimed: false };
+	pi.events.emit(REGISTRATION_EVENT, registration);
+	if (registration.claimed) return;
+
 	let directory = "";
 	let active: Goal | undefined;
 	let started = false;
@@ -370,4 +376,9 @@ export default function (pi: ExtensionAPI) {
 	]) {
 		pi.registerCommand(name, { description, handler: (args, ctx) => handleCommand(name, args, ctx) });
 	}
+
+	// Claim only after registration succeeds so failed copies cannot block retries.
+	pi.events.on(REGISTRATION_EVENT, (data) => {
+		(data as typeof registration).claimed = true;
+	});
 }

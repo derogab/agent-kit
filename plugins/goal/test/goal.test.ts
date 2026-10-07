@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -25,7 +26,7 @@ const assistant = (text: string, stopReason = "stop") => ({
 	stopReason,
 });
 
-const setup = (options: { cwd?: string; mode?: string } = {}) => {
+const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; factory?: typeof goal } = {}) => {
 	const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "pi-goal-test-"));
 	if (!options.cwd) directories.push(cwd);
 	const mode = options.mode ?? "tui";
@@ -61,6 +62,7 @@ const setup = (options: { cwd?: string; mode?: string } = {}) => {
 		},
 	} as unknown as ExtensionCommandContext;
 	const api = {
+		events: options.bus ?? new EventEmitter(),
 		on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
@@ -69,7 +71,7 @@ const setup = (options: { cwd?: string; mode?: string } = {}) => {
 			void handlers.get("agent_start")!({ type: "agent_start" }, ctx);
 		},
 	};
-	goal(api as unknown as ExtensionAPI);
+	(options.factory ?? goal)(api as unknown as ExtensionAPI);
 	const emit = (name: string, event: any = {}) => handlers.get(name)!({ type: name, ...event }, ctx);
 	const boundary = (messages: any[] = [assistant("More work remains.")], overrides: Partial<AgentBeforeSettleEvent> = {}) => emit("agent_before_settle", {
 		entries: [], continue: false, outcome: "completed",
@@ -85,7 +87,7 @@ const setup = (options: { cwd?: string; mode?: string } = {}) => {
 		return typeof widget === "function" ? widget({}, theme).render(width) : widget ?? [];
 	};
 	return {
-		ctx, api, registry, commands, tools, sent, notifications, widgets, selections, dialogs, emit, boundary,
+		ctx, api, registry, handlers, commands, tools, sent, notifications, widgets, selections, dialogs, emit, boundary,
 		cwd, directory, current, archiveDir, archived, render,
 		state: () => JSON.parse(readFileSync(current, "utf8")),
 		archive: (index = 0) => JSON.parse(readFileSync(join(archiveDir, archived()[index]), "utf8")),
@@ -100,6 +102,52 @@ const setup = (options: { cwd?: string; mode?: string } = {}) => {
 };
 
 const tasks = [{ text: "Fix tests", done: true }, { text: "Run full suite", done: false }];
+
+const { default: projectGoal } = await import(new URL("../extensions/goal.ts?project", import.meta.url).href);
+
+test("duplicate install paths register only one tool, command set and lifecycle", async () => {
+	assert.notEqual(projectGoal, goal);
+	for (const factories of [[goal, projectGoal], [projectGoal, goal]]) {
+		const bus = new EventEmitter();
+		const first = setup({ bus, factory: factories[0] });
+		const second = setup({ bus, factory: factories[1] });
+		assert.equal(second.handlers.size, 0);
+		assert.equal(second.commands.size, 0);
+		assert.equal(second.tools.size, 0);
+		await first.emit("session_start");
+		await first.run("Fix the tests.");
+		await first.update(tasks);
+		assert.equal((await first.boundary()).entries.length, 1);
+		assert.deepEqual(first.state().tasks, tasks);
+		await first.emit("session_shutdown");
+		assert.equal(setup({ bus }).tools.size, 0, "session changes must retain the claim");
+		// Pi removes runtime subscriptions on /reload, but keeps the shared bus.
+		bus.removeAllListeners();
+		const reloaded = setup({ bus, cwd: first.cwd, factory: factories[1] });
+		assert.deepEqual([...reloaded.commands.keys()], [...first.commands.keys()]);
+		assert.deepEqual([...reloaded.tools.keys()], ["goal_progress"]);
+		assert.equal(setup({ bus, factory: factories[0] }).tools.size, 0);
+		await reloaded.emit("session_start");
+		assert.equal(reloaded.state().status, "paused");
+		assert.deepEqual(reloaded.state().tasks, tasks);
+		await reloaded.command("goal-resume");
+		assert.equal(reloaded.sent.length, 1);
+	}
+});
+
+test("a failed registration does not prevent another copy from loading", () => {
+	const bus = new EventEmitter();
+	assert.throws(() => setup({
+		bus,
+		factory: (pi) => goal({
+			...pi,
+			registerTool: () => { throw new Error("Tool registration failed"); },
+		}),
+	}), /Tool registration failed/);
+	const next = setup({ bus, factory: projectGoal });
+	assert.equal(next.commands.size, 6);
+	assert.deepEqual([...next.tools.keys()], ["goal_progress"]);
+});
 
 test("does nothing and creates no files without an explicit goal", async () => {
 	const h = setup();
