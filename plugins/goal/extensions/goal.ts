@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey, SelectList, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const DONE = "<goal>done</goal>";
@@ -60,6 +60,7 @@ export default function (pi: ExtensionAPI) {
 	let awaitingSettle = false;
 	let generation = 0;
 	let archives: Array<{ file: string; goal: Goal }> = [];
+	let closeExpanded: (() => void) | undefined;
 
 	const currentFile = () => join(directory, "current.json");
 	const save = () => {
@@ -87,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
 			...goal.tasks.slice(0, MAX_VISIBLE_TASKS).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
-			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more`] : []),
+			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more${ctx.mode === "tui" ? " · Ctrl+Shift+T: expand" : ""}`] : []),
 			ended(goal) ? review || "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
 		];
 		if (ctx.mode !== "tui") {
@@ -112,6 +113,57 @@ export default function (pi: ExtensionAPI) {
 		}), { placement: "aboveEditor" });
 	};
 
+	pi.registerShortcut(Key.ctrlShift("t"), {
+		description: "Expand or collapse the full goal checklist",
+		handler: async (ctx) => {
+			if (closeExpanded) { closeExpanded(); return; }
+			const goal = active ?? archives.at(-1)?.goal;
+			if (ctx.mode !== "tui" || !ctx.hasUI || !goal || goal.tasks.length <= MAX_VISIBLE_TASKS) return;
+			await ctx.ui.custom<void>((tui, theme, keys, done) => {
+				const close = () => {
+					closeExpanded = undefined;
+					done();
+				};
+				closeExpanded = close;
+				let list: SelectList;
+				let selected = 0;
+				let pageSize = 1;
+				return {
+					render(width) {
+						pageSize = Math.max(1, tui.terminal.rows - 8);
+						list = new SelectList(goal.tasks.map((task, i) => ({
+							value: String(i), label: `${task.done ? "✓" : "·"} ${singleLine(task.text)}`,
+						})), pageSize, {
+							selectedPrefix: (text) => theme.fg("accent", text),
+							selectedText: (text) => theme.fg("accent", text),
+							description: (text) => theme.fg("muted", text),
+							scrollInfo: (text) => theme.fg("dim", text),
+							noMatch: () => theme.fg("muted", "No tasks"),
+						});
+						selected = Math.min(selected, Math.max(0, goal.tasks.length - 1));
+						list.setSelectedIndex(selected);
+						list.onCancel = close;
+						return [
+							theme.fg("accent", truncateToWidth(`goal · ${goal.status} · ${progress(goal)}`, width)),
+							theme.fg("muted", truncateToWidth(singleLine(goal.instruction), width)),
+							...list.render(width).map((line) => truncateToWidth(line, width)),
+							theme.fg("dim", truncateToWidth("↑↓ / PgUp / PgDn: scroll · Ctrl+Shift+T / Esc: collapse", width)),
+						];
+					},
+					handleInput(data) {
+						if (matchesKey(data, Key.ctrlShift("t"))) close();
+						else if (keys.matches(data, "tui.select.pageUp")) list?.setSelectedIndex(Math.max(0, selected - pageSize));
+						else if (keys.matches(data, "tui.select.pageDown")) list?.setSelectedIndex(Math.min(goal.tasks.length - 1, selected + pageSize));
+						else list?.handleInput(data);
+						selected = Number(list?.getSelectedItem()?.value ?? 0);
+						tui.requestRender();
+					},
+					invalidate() {},
+				};
+			}, { overlay: true });
+		},
+	});
+
 	const fail = (ctx: ExtensionContext, error: unknown) => {
 		started = false;
 		if (active?.status === "running") {
@@ -133,6 +185,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const load = (ctx: ExtensionContext) => {
+		closeExpanded?.();
 		generation++;
 		started = false;
 		active = undefined;
@@ -213,6 +266,7 @@ export default function (pi: ExtensionAPI) {
 		try { load(ctx); } catch (error) { fail(ctx, error); }
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
+		closeExpanded?.();
 		awaitingSettle = false;
 		generation++;
 		pause(ctx);
