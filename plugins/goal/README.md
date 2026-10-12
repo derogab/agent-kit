@@ -27,9 +27,9 @@ For example:
 /goal Fix the failing tests without skipping or removing any, then run the full suite to verify.
 ```
 
-Pi keeps working and checking its progress until it reports completion or a blocker that needs your input. A small box above the editor shows the objective, status, completed-task count, round, and checklist. The first ten tasks appear on compact lines: `·` for pending and `✓` for completed. Longer checklists show an omitted-task count; the full checklist stays saved. The agent updates the checklist as it works. Normal tool permissions still apply.
+Pi keeps working and checking its progress until it reports completion or a blocker that needs your input. A small box above the editor shows the objective, status, completed-task count, round, and checklist. The first ten tasks appear on compact lines: `·` for pending and `✓` for completed. Longer checklists show an omitted-task count; the full checklist stays saved. For checklists with more than ten tasks in terminal mode, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> to expand the full checklist. Use the up/down arrow keys or <kbd>Page Up</kbd>/<kbd>Page Down</kbd> to scroll, and press the shortcut again or <kbd>Esc</kbd> to collapse it. The expanded list also works for paused goals and goals awaiting review. The agent updates the checklist as it works. Normal tool permissions still apply.
 
-Pressing <kbd>Esc</kbd>, errors, session changes, tree navigation, and `/reload` pause the goal without losing saved progress. In another session, run `/goal-resume` from the same project directory. Goals never resume automatically.
+Pressing <kbd>Esc</kbd> outside the expanded checklist, errors, session changes, tree navigation, and `/reload` pause the goal without losing saved progress. In another session, run `/goal-resume` from the same project directory. Goals never resume automatically.
 
 When the agent reports completion, the goal stays visible as awaiting review. Only your confirmation through `/goal-review` deletes it. You can start another goal while older ones await review.
 

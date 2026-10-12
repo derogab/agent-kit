@@ -12,7 +12,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import goal from "../extensions/goal.ts";
 
 const DONE = "<goal>done</goal>";
@@ -33,6 +33,10 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
 	const tools = new Map<string, any>();
+	const shortcuts = new Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>();
+	const tui = { terminal: { rows: 30 }, requestRender() {} };
+	const theme = { fg: (_color: string, text: string) => text };
+	let expanded: any;
 	const sent: string[] = [];
 	const notifications: Array<{ message: string; level: string }> = [];
 	const widgets = new Map<string, any>();
@@ -52,6 +56,10 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 		hasPendingMessages: () => pending,
 		abort: () => { aborts++; },
 		ui: {
+			custom: (factory: any, options: any) => new Promise<void>((resolve) => {
+				assert.equal(options.overlay, true);
+				expanded = factory(tui, theme, getKeybindings(), () => { expanded = undefined; resolve(); });
+			}),
 			notify: (message: string, level: string) => notifications.push({ message, level }),
 			setWidget: (key: string, value: any) => widgets.set(key, value),
 			select: async (title: string, options: string[]) => {
@@ -66,6 +74,7 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 		on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
+		registerShortcut: (key: string, shortcut: any) => shortcuts.set(key, shortcut),
 		sendUserMessage: (text: string) => {
 			sent.push(text);
 			void handlers.get("agent_start")!({ type: "agent_start" }, ctx);
@@ -87,8 +96,11 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 		return typeof widget === "function" ? widget({}, theme).render(width) : widget ?? [];
 	};
 	return {
-		ctx, api, registry, handlers, commands, tools, sent, notifications, widgets, selections, dialogs, emit, boundary,
-		cwd, directory, current, archiveDir, archived, render,
+		ctx, api, registry, handlers, commands, tools, shortcuts, sent, notifications, widgets, selections, dialogs, emit, boundary,
+		cwd, directory, current, archiveDir, archived, render, tui,
+		expand: () => shortcuts.get("ctrl+shift+t")!.handler(ctx),
+		renderExpanded: (width = 100): string[] => expanded?.render(width) ?? [],
+		inputExpanded: (data: string) => expanded?.handleInput(data),
 		state: () => JSON.parse(readFileSync(current, "utf8")),
 		archive: (index = 0) => JSON.parse(readFileSync(join(archiveDir, archived()[index]), "utf8")),
 		run: (args: string) => commands.get("goal")!.handler(args, ctx),
@@ -114,6 +126,8 @@ test("duplicate install paths register only one tool, command set and lifecycle"
 		assert.equal(second.handlers.size, 0);
 		assert.equal(second.commands.size, 0);
 		assert.equal(second.tools.size, 0);
+		assert.equal(second.shortcuts.size, 0);
+		assert.deepEqual([...first.shortcuts.keys()], ["ctrl+shift+t"]);
 		await first.emit("session_start");
 		await first.run("Fix the tests.");
 		await first.update(tasks);
@@ -293,6 +307,116 @@ test("large checklists have a bounded preview without losing saved or resumed ta
 		assert.ok(archived.render().some((line) => line.includes("… 90 more")));
 	}
 });
+
+test("Ctrl+Shift+T expands all tasks and toggles back without changing goal state", async () => {
+	const h = setup();
+	await h.expand();
+	assert.deepEqual(h.renderExpanded(), []);
+	assert.equal(existsSync(h.directory), false);
+	await h.run("Complete every task.");
+	for (const count of [0, 10]) {
+		await h.update(Array.from({ length: count }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
+		await h.expand();
+		assert.deepEqual(h.renderExpanded(), []);
+	}
+	const checklist = Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
+	await h.update(checklist);
+	assert.match(h.render().join("\n"), /… 1 more · Ctrl\+Shift\+T: expand/);
+	const before = readFileSync(h.current, "utf8");
+	const opening = h.expand();
+	assert.equal(h.renderExpanded().filter((line) => /[·✓] Task /.test(line)).length, 11);
+	assert.match(h.renderExpanded().join("\n"), /✓ Task 11/);
+	await h.update(checklist.map((task) => ({ ...task, done: true })));
+	assert.match(h.renderExpanded().join("\n"), /11\/11 tasks done/);
+	assert.match(h.renderExpanded().join("\n"), /✓ Task 2/);
+	await h.update(checklist);
+	await h.expand();
+	await opening;
+	assert.deepEqual(h.renderExpanded(), []);
+	assert.equal(readFileSync(h.current, "utf8"), before);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.aborts(), 0);
+});
+
+test("expanded checklists scroll to every task, resize safely and collapse on Escape", async () => {
+	const h = setup();
+	await h.run("Complete every task.");
+	await h.update(Array.from({ length: 100 }, (_, i) => ({ text: `Task ${i + 1} 界 👩‍💻\ncheck`, done: false })));
+	const opening = h.expand();
+	const seen = new Set<string>();
+	for (let i = 0; i < 100; i++) {
+		const lines = h.renderExpanded();
+		assert.ok(lines.length < h.tui.terminal.rows);
+		for (const line of lines) {
+			const task = line.match(/Task (\d+)/);
+			if (task) seen.add(task[1]);
+		}
+		h.inputExpanded("\x1b[B");
+	}
+	assert.equal(seen.size, 100);
+	for (const rows of [12, 24, 40]) {
+		h.tui.terminal.rows = rows;
+		for (const width of [0, 1, 4, 20, 100]) {
+			const lines = h.renderExpanded(width);
+			assert.ok(lines.length < rows);
+			for (const line of lines) assert.ok(visibleWidth(line) <= width);
+		}
+	}
+	h.inputExpanded("\x1b[A");
+	h.renderExpanded();
+	h.inputExpanded("\x1b[5~");
+	assert.match(h.renderExpanded().join("\n"), /Task 68 /);
+	h.inputExpanded("\x1b[6~");
+	assert.match(h.renderExpanded().join("\n"), /Task 100 /);
+	await h.update(tasks);
+	assert.match(h.renderExpanded().join("\n"), /✓ Fix tests/);
+	assert.match(h.renderExpanded().join("\n"), /· Run full suite/);
+	await h.update([]);
+	assert.match(h.renderExpanded().join("\n"), /No tasks/);
+	h.inputExpanded("\x1b");
+	await opening;
+	assert.deepEqual(h.renderExpanded(), []);
+	assert.equal(h.state().status, "running");
+	assert.equal(h.aborts(), 0);
+});
+
+test("expanded checklists work for paused and archived goals and close on session changes", async () => {
+	for (const event of ["session_start", "session_tree", "session_shutdown"]) {
+		const h = setup();
+		await h.run("Complete every task.");
+		const checklist = Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false }));
+		await h.update(checklist);
+		await h.command("goal-pause");
+		let opening = h.expand();
+		assert.match(h.renderExpanded().join("\n"), /goal · paused/);
+		h.inputExpanded("\x1b[116;6u"); // Kitty Ctrl+Shift+T.
+		await opening;
+		assert.deepEqual(h.renderExpanded(), []);
+		await h.emit("agent_settled");
+		await h.command("goal-resume");
+		await h.boundary([assistant(DONE)]);
+		opening = h.expand();
+		assert.match(h.renderExpanded().join("\n"), /goal · done/);
+		assert.match(h.renderExpanded().join("\n"), /· Task 11/);
+		await h.emit(event);
+		await opening;
+		assert.deepEqual(h.renderExpanded(), []);
+		assert.deepEqual(h.archive().tasks, checklist);
+	}
+});
+
+for (const mode of ["rpc", "json"]) {
+	test(`expansion is terminal-only and leaves ${mode} goal behavior unchanged`, async () => {
+		const h = setup({ mode });
+		await h.run("Complete every task.");
+		await h.update(Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
+		const before = h.state();
+		await h.expand();
+		assert.deepEqual(h.renderExpanded(), []);
+		assert.deepEqual(h.state(), before);
+		assert.ok(!h.render().join("\n").includes("Ctrl+Shift+T"));
+	});
+}
 
 test("continues repeatedly while preserving other extensions' entries", async () => {
 	const h = setup();
