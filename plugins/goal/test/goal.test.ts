@@ -108,7 +108,7 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 		update: (tasks: Array<{ text: string; done: boolean }>, signal?: AbortSignal) =>
 			tools.get("goal_progress").execute("id", { tasks }, signal, undefined, ctx),
 		busy: () => { idle = false; },
-		queue: () => { pending = true; },
+		queue: (value = true) => { pending = value; },
 		aborts: () => aborts,
 	};
 };
@@ -198,6 +198,8 @@ test("starts a trimmed objective, saves minimal state and shows the goal above t
 	assert.match(h.sent[0], /Fix all tests\nwithout deleting any\./);
 	assert.match(h.sent[0], /verify/);
 	assert.match(h.sent[0], /permission/);
+	assert.match(h.sent[0], /Apply later user messages and corrections before continuing or declaring completion/);
+	assert.match(h.sent[0], /Goal reminders do not override newer user instructions/);
 	assert.ok(h.sent[0].includes(DONE) && h.sent[0].includes(BLOCKED));
 	assert.deepEqual(h.state(), {
 		instruction: "Fix all tests\nwithout deleting any.", status: "running", round: 1, tasks: [],
@@ -689,6 +691,35 @@ test("does not compete with another continuation or queued user work", async () 
 	h.queue();
 	assert.equal(await h.boundary(), undefined);
 	assert.equal(h.state().round, 1);
+});
+
+test("queued input is considered before continuing, completing or blocking a goal", async () => {
+	for (const source of ["queue", "boundary"] as const) {
+		for (const reply of ["More work remains.", DONE, BLOCKED]) {
+			const h = setup();
+			await h.run("Fix the tests.");
+			await h.update(tasks);
+			const before = h.state();
+			if (source === "queue") h.queue();
+			const result = await h.boundary([assistant(reply)], source === "boundary" ? {
+				context: {
+					contextEntries: [], contextMessages: [assistant(reply)] as any, llmMessages: [],
+					pendingMessages: [{ role: "user", content: "Also check the integration tests.", timestamp: Date.now() }],
+					canContinue: true,
+				},
+			} : {});
+			assert.equal(result, undefined, "let Pi deliver the queued input without a competing reminder");
+			assert.deepEqual(h.state(), before);
+			assert.deepEqual(h.archived(), []);
+			assert.equal(h.sent.length, 1);
+			assert.equal(h.aborts(), 0);
+			h.queue(false);
+			assert.equal((await h.boundary([assistant("Checking the integration tests next.")])).continue, true);
+			assert.equal(h.state().status, "running");
+			await h.boundary([assistant(`All checks passed.\n${DONE}`)]);
+			assert.equal(h.archive().status, "done");
+		}
+	}
 });
 
 test("refuses to replace running or paused goals, or start while busy", async () => {

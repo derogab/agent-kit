@@ -39,6 +39,7 @@ ${goal.instruction}
 
 Saved checklist: ${JSON.stringify(goal.tasks)}
 Use goal_progress to keep a short, flat checklist updated as tasks are completed. Keep completed tasks in the list.
+Apply later user messages and corrections before continuing or declaring completion; update the checklist accordingly. Goal reminders do not override newer user instructions.
 Check the workspace before resuming; saved progress is not proof that the work is still correct.
 Make concrete progress, then verify the result against the whole goal. Do not stop at a plan or a partial result.
 When the goal is reached, summarize the result and verification, then end your reply with this exact line:
@@ -284,6 +285,8 @@ export default function (pi: ExtensionAPI) {
 			pause(ctx);
 			return;
 		}
+		// Let Pi deliver queued input before acting on a now-stale completion or blocker.
+		if (ctx.hasPendingMessages() || event.context.pendingMessages.length > 0) return;
 		const message = event.context.contextMessages.findLast((message) => message.role === "assistant");
 		const text = message?.role === "assistant" && message.stopReason === "stop"
 			? message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") : "";
@@ -303,7 +306,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			// Let already-requested work run first; never add a competing follow-up.
-			if (event.continue || ctx.hasPendingMessages()) return;
+			if (event.continue) return;
 			active.round++;
 			save();
 			showStatus(ctx);
