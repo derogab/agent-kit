@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 	const showStatus = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
 		const goal = active ?? archives.at(-1);
-		if (!goal) {
+		if (!goal || (!active && goal.status === "done")) {
 			ctx.ui.setWidget("goal", undefined);
 			return;
 		}
@@ -223,6 +223,7 @@ export default function (pi: ExtensionAPI) {
 		renameSync(currentFile(), file);
 		archives.push(active);
 		active = undefined;
+		if (status === "done") closeExpanded?.();
 		showStatus(ctx);
 	};
 

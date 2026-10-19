@@ -32,7 +32,7 @@ You can steer a running goal: submit a message with <kbd>Enter</kbd> to give cor
 
 Pressing <kbd>Esc</kbd> outside the expanded checklist, errors, session changes, tree navigation, and `/reload` pause the goal without losing saved progress. In another session, run `/goal-resume` from the same project directory. Goals never resume automatically.
 
-When the agent reports completion, Pi announces that the goal was reached, marks its checklist complete, and automatically archives it. The goal and completed tasks stay visible as `done · archived` until you start another goal. No review or confirmation is needed. Stopping a goal archives it as `stopped` without marking unfinished tasks complete.
+When the agent reports completion, Pi announces that the goal was reached, marks its checklist complete, and automatically archives it. After the final recap, the goal box and any open expanded checklist disappear. Use `/goal-status` to check the archived goal. No review or confirmation is needed. Stopping a goal archives it as `stopped` without marking unfinished tasks complete.
 
 ## Saved goals
 
@@ -41,7 +41,7 @@ Files live under the directory where you start Pi:
 - `.pi/goals/current.json`: the current objective, status, round, and checklist.
 - `.pi/goals/archive/`: completed or stopped goals retained as history, including goals saved by earlier versions.
 
-Blocked and paused goals stay in `current.json` and can be resumed with `/goal-resume`. Archived goals are not resumed or deleted by the plugin; start a new goal for further work. When no goal is active, the latest archive and its checklist remain visible, including after a restart. These files do not contain the conversation; on resume, Pi uses the objective, checklist, and workspace to continue.
+Blocked and paused goals stay in `current.json` and can be resumed with `/goal-resume`. Archived goals are not resumed or deleted by the plugin; start a new goal for further work. When no goal is active, the latest archive and its checklist remain visible only if that goal was stopped; completed goals stay hidden, including after a restart. These files do not contain the conversation; on resume, Pi uses the objective, checklist, and workspace to continue.
 
 If archiving fails, Pi reports an error and keeps the goal saved. Fix the storage problem, then use `/goal-status` or restart Pi to retry archiving without re-running the goal.
 

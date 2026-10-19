@@ -249,7 +249,7 @@ test("checklist updates persist, render and feed the next continuation", async (
 	assert.deepEqual(h.state().tasks, tasks);
 });
 
-test("checklist rows stay compact, update their markers and survive pause and archive reloads", async () => {
+test("checklist rows stay compact, survive pause reloads and disappear after completion", async () => {
 	for (const mode of ["tui", "rpc"]) {
 		const h = setup({ mode });
 		const rows = (h: ReturnType<typeof setup>) => h.render().map((line) => line.replace(/^│ | │$/g, "").trimEnd());
@@ -271,7 +271,8 @@ test("checklist rows stay compact, update their markers and survive pause and ar
 		await next.boundary([assistant(DONE)]);
 		const archived = setup({ cwd: h.cwd, mode });
 		await archived.emit("session_start");
-		assert.ok(rows(archived).includes("✓ Fix tests") && rows(archived).includes("✓ Run full suite"));
+		assert.deepEqual(archived.render(), []);
+		assert.deepEqual(archived.archive().tasks, completedTasks);
 	}
 });
 
@@ -302,8 +303,8 @@ test("large checklists have a bounded preview without losing saved or resumed ta
 		assert.deepEqual(next.archive().tasks, checklist.map((task) => ({ ...task, done: true })));
 		const archived = setup({ cwd: h.cwd, mode });
 		await archived.emit("session_start");
-		assert.equal(archived.render().length, mode === "tui" ? 16 : 14);
-		assert.ok(archived.render().some((line) => line.includes("… 90 more")));
+		assert.deepEqual(archived.render(), []);
+		assert.deepEqual(archived.archive().tasks, checklist.map((task) => ({ ...task, done: true })));
 	}
 });
 
@@ -404,6 +405,18 @@ test("expanded checklists work for paused and archived goals and close on sessio
 	}
 });
 
+test("completion closes an open expanded checklist", async () => {
+	const h = setup();
+	await h.run("Complete every task.");
+	await h.update(Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
+	const opening = h.expand();
+	assert.match(h.renderExpanded().join("\n"), /Task 11/);
+	await h.boundary([assistant(`Completed and verified all tasks.\n${DONE}`)]);
+	assert.deepEqual(h.renderExpanded(), []);
+	assert.deepEqual(h.render(), []);
+	await opening;
+});
+
 for (const mode of ["rpc", "json"]) {
 	test(`expansion is terminal-only and leaves ${mode} goal behavior unchanged`, async () => {
 		const h = setup({ mode });
@@ -445,6 +458,7 @@ for (const mode of ["tui", "rpc", "json"]) {
 		assert.equal(h.archived().length, 1);
 		assert.deepEqual(h.archive(), { instruction: "Fix the tests.", status: "done", round: 1, tasks: completedTasks });
 		assert.equal(h.notifications.at(-1)!.message, "Goal reached and archived. 2/2 tasks done: Fix the tests.");
+		assert.deepEqual(h.render(), []);
 		await h.emit("agent_settled");
 		assert.equal(await h.boundary(), undefined);
 		assert.equal(h.archived().length, 1);
@@ -453,16 +467,11 @@ for (const mode of ["tui", "rpc", "json"]) {
 
 		const next = setup({ cwd: h.cwd, mode });
 		await next.emit("session_start");
-		if (mode !== "json") {
-			for (const instance of [h, next]) {
-				assert.match(instance.render().join("\n"), /done · archived · 2\/2 tasks done/);
-				assert.match(instance.render().join("\n"), /✓ Run full suite/);
-				assert.ok(!/review|confirm/.test(instance.render().join("\n")));
-			}
-		}
+		for (const instance of [h, next]) assert.deepEqual(instance.render(), []);
 		assert.equal(next.sent.length, 0);
 		await next.command("goal-status");
 		assert.match(next.notifications.at(-1)!.message, /Goal \(done, archived, round 1, 2\/2 tasks done\)/);
+		assert.deepEqual(next.render(), []);
 		await next.command("goal-resume");
 		assert.match(next.notifications.at(-1)!.message, /No active goal/);
 		assert.equal(next.sent.length, 0);
@@ -475,12 +484,12 @@ for (const mode of ["tui", "rpc", "json"]) {
 }
 
 for (const mode of ["tui", "rpc"]) {
-	test(`the current or latest archived goal stays visible without review prompts in ${mode} mode`, async () => {
+	test(`completed goals stay hidden while stopped archives remain visible in ${mode} mode`, async () => {
 		const h = setup({ mode });
 		await h.run("First goal.");
 		await h.boundary([assistant(DONE)]);
 		await h.emit("agent_settled");
-		assert.match(h.render().join("\n"), /done · archived/);
+		assert.deepEqual(h.render(), []);
 		const firstFile = h.archived()[0];
 		const first = readFileSync(join(h.archiveDir, firstFile), "utf8");
 		await h.run("Second goal.");
@@ -854,7 +863,8 @@ for (const status of ["done", "stopped"]) {
 		assert.equal(existsSync(h.current), false);
 		assert.equal(h.archived().length, 1);
 		assert.deepEqual(h.archive(), expected);
-		assert.match(h.render().join("\n"), /archived/);
+		if (status === "done") assert.deepEqual(h.render(), []);
+		else assert.match(h.render().join("\n"), /stopped · archived/);
 		assert.equal(h.sent.length, 1);
 	});
 }
@@ -989,7 +999,7 @@ for (const mode of ["rpc", "json"]) {
 		await h.boundary([assistant(DONE)]);
 		assert.equal(await h.boundary(), undefined);
 		assert.equal(h.archive().status, "done");
-		if (mode === "rpc") assert.ok(Array.isArray(h.widgets.get("goal")));
+		if (mode === "rpc") assert.equal(h.widgets.get("goal"), undefined);
 		else assert.equal(h.widgets.size, 0);
 	});
 }
