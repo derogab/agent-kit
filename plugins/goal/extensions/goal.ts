@@ -42,12 +42,12 @@ Use goal_progress to keep a short, flat checklist updated as tasks are completed
 Apply later user messages and corrections before continuing or declaring completion; update the checklist accordingly. Goal reminders do not override newer user instructions.
 Check the workspace before resuming; saved progress is not proof that the work is still correct.
 Make concrete progress, then verify the result against the whole goal. Do not stop at a plan or a partial result.
-When the goal is reached, summarize the result and verification, then end your reply with this exact line:
+When the goal is reached, update the checklist, summarize the result and verification, then end your reply with this exact line:
 ${DONE}
 If you cannot proceed without user input, permission, or an unavailable prerequisite, explain the blocker and end your reply with this exact line:
 ${BLOCKED}
 Otherwise, keep working. Never claim success without evidence or bypass permissions to make progress.
-Only the user may confirm completion or delete saved goals. Do not edit .pi/goals directly.`;
+The plugin automatically marks the checklist complete and archives the goal when you report completion. Do not edit .pi/goals directly.`;
 
 export default function (pi: ExtensionAPI) {
 	// Separate install paths share Pi's bus; subscriptions are removed on runtime reload.
@@ -59,8 +59,7 @@ export default function (pi: ExtensionAPI) {
 	let active: Goal | undefined;
 	let started = false;
 	let awaitingSettle = false;
-	let generation = 0;
-	let archives: Array<{ file: string; goal: Goal }> = [];
+	let archives: Goal[] = [];
 	let closeExpanded: (() => void) | undefined;
 
 	const currentFile = () => join(directory, "current.json");
@@ -78,19 +77,19 @@ export default function (pi: ExtensionAPI) {
 
 	const showStatus = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
-		const goal = active ?? archives.at(-1)?.goal;
-		const review = archives.length ? `${archives.length} awaiting review · /goal-review` : "";
+		const goal = active ?? archives.at(-1);
 		if (!goal) {
 			ctx.ui.setWidget("goal", undefined);
 			return;
 		}
-		const status = ended(goal) ? `${goal.status} · awaiting review` : goal.status;
+		const status = ended(goal) ? `${goal.status} · ${active ? "archive pending" : "archived"}` : goal.status;
 		const lines = [
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
 			...goal.tasks.slice(0, MAX_VISIBLE_TASKS).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
 			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more${ctx.mode === "tui" ? " · Ctrl+Shift+T: expand" : ""}`] : []),
-			ended(goal) ? review || "/goal-review" : `${active?.status === "running" ? "/goal-pause" : "/goal-resume"}${review ? ` · ${review}` : ""}`,
+			ended(goal) ? (active ? "Check saved state; /goal-status to retry archiving" : "/goal <objective>: start another goal")
+				: goal.status === "running" ? "/goal-pause" : "/goal-resume",
 		];
 		if (ctx.mode !== "tui") {
 			ctx.ui.setWidget("goal", lines);
@@ -118,7 +117,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Expand or collapse the full goal checklist",
 		handler: async (ctx) => {
 			if (closeExpanded) { closeExpanded(); return; }
-			const goal = active ?? archives.at(-1)?.goal;
+			const goal = active ?? archives.at(-1);
 			if (ctx.mode !== "tui" || !ctx.hasUI || !goal || goal.tasks.length <= MAX_VISIBLE_TASKS) return;
 			await ctx.ui.custom<void>((tui, theme, keys, done) => {
 				const close = () => {
@@ -171,7 +170,8 @@ export default function (pi: ExtensionAPI) {
 			active.status = "paused";
 			try { save(); } catch { /* Keep the original error if storage is still unavailable. */ }
 		}
-		ctx.ui.notify(`Goal paused; check saved state. ${error instanceof Error ? error.message : String(error)}`, "error");
+		const reason = active && ended(active) ? "Goal could not be archived" : "Goal paused";
+		ctx.ui.notify(`${reason}; check saved state. ${error instanceof Error ? error.message : String(error)}`, "error");
 		showStatus(ctx);
 	};
 
@@ -187,7 +187,6 @@ export default function (pi: ExtensionAPI) {
 
 	const load = (ctx: ExtensionContext) => {
 		closeExpanded?.();
-		generation++;
 		started = false;
 		active = undefined;
 		archives = [];
@@ -203,34 +202,32 @@ export default function (pi: ExtensionAPI) {
 		if (existsSync(archiveDir)) {
 			for (const name of readdirSync(archiveDir).filter((name) => name.endsWith(".json")).sort()) {
 				const file = join(archiveDir, name);
-				try { archives.push({ file, goal: readGoal(file) }); }
+				try { archives.push(readGoal(file)); }
 				catch (error) { ctx.ui.notify(String(error), "warning"); }
 			}
 		}
-		showStatus(ctx);
+		// Retry an interrupted archive move without restarting completed work.
+		if (active?.status === "done" || active?.status === "stopped") archive(ctx, active.status);
+		else showStatus(ctx);
 	};
 
 	const archive = (ctx: ExtensionContext, status: "done" | "stopped") => {
 		if (!active) return;
 		started = false;
 		active.status = status;
+		if (status === "done") active.tasks = active.tasks.map((task) => ({ ...task, done: true }));
 		save();
 		const archiveDir = join(directory, "archive");
 		mkdirSync(archiveDir, { recursive: true });
 		const file = join(archiveDir, `${Date.now()}-${randomUUID()}.json`);
 		renameSync(currentFile(), file);
-		archives.push({ file, goal: active });
+		archives.push(active);
 		active = undefined;
 		showStatus(ctx);
 	};
 
 	const start = async (ctx: ExtensionCommandContext) => {
 		if (!active) return;
-		if (ended(active)) {
-			active.status = "paused";
-			save();
-			showStatus(ctx);
-		}
 		if (!ctx.model) {
 			ctx.ui.notify("Select a model before starting a goal.", "warning");
 			return;
@@ -269,7 +266,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		closeExpanded?.();
 		awaitingSettle = false;
-		generation++;
 		pause(ctx);
 		active = undefined;
 		archives = [];
@@ -293,8 +289,9 @@ export default function (pi: ExtensionAPI) {
 		const finalLine = text.trim().split(/\r?\n/).at(-1);
 		try {
 			if (finalLine === DONE) {
+				const goal = active;
 				archive(ctx, "done");
-				ctx.ui.notify("Goal reached. Use /goal-review to confirm and delete, or resume.", "info");
+				ctx.ui.notify(`Goal reached and archived. ${progress(goal)}: ${singleLine(goal.instruction)}`, "info");
 				return;
 			}
 			if (finalLine === BLOCKED) {
@@ -354,9 +351,10 @@ export default function (pi: ExtensionAPI) {
 			// Reload while idle so a new session or manual file repair is picked up.
 			if (active?.status !== "running") load(ctx);
 			if (command === "goal-status") {
-				ctx.ui.notify(active
-					? `Goal (${active.status}, round ${active.round}, ${progress(active)}): ${active.instruction}`
-					: `No active goal.${archives.length ? " Use /goal-review for ended goals." : " Use /goal <objective> to start."}`, "info");
+				const goal = active ?? archives.at(-1);
+				ctx.ui.notify(goal
+					? `Goal (${goal.status}${active ? "" : ", archived"}, round ${goal.round}, ${progress(goal)}): ${goal.instruction}`
+					: "No active goal. Use /goal <objective> to start.", "info");
 				return;
 			}
 			if (command === "goal-pause") {
@@ -371,44 +369,15 @@ export default function (pi: ExtensionAPI) {
 				if (!active) { ctx.ui.notify("No active goal.", "info"); return; }
 				const abort = active.status === "running";
 				try { archive(ctx, "stopped"); } finally { if (abort) ctx.abort(); }
-				ctx.ui.notify("Goal stopped and saved. Use /goal-review.", "info");
+				ctx.ui.notify("Goal stopped and archived.", "info");
 				return;
 			}
 			if (active?.status === "running" || awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
 				ctx.ui.notify("Stop the current goal or wait for Pi to finish first.", "warning");
 				return;
 			}
-			if (command === "goal-review") {
-				if (!ctx.hasUI) { ctx.ui.notify("Goal review requires an interactive UI.", "warning"); return; }
-				// Also recover an ended current.json if archiving was interrupted.
-				const choices = [...archives, ...(active && ended(active) ? [{ file: currentFile(), goal: active }] : [])];
-				if (!choices.length) { ctx.ui.notify("No goals awaiting review.", "info"); return; }
-				const version = generation;
-				const previous = active;
-				const unchanged = () => generation === version && active === previous && ctx.isIdle() && !ctx.hasPendingMessages();
-				const labels = choices.map(({ goal }, i) => `${i + 1}. ${goal.status} · ${singleLine(goal.instruction)}`);
-				const selected = await ctx.ui.select("Review ended goal", labels);
-				const choice = choices[labels.indexOf(selected ?? "")];
-				if (!choice || !unchanged()) return;
-				const action = await ctx.ui.select(singleLine(choice.goal.instruction), ["Keep", "Resume", "Confirm finished and delete"]);
-				if (!unchanged()) return;
-				if (action === "Confirm finished and delete") {
-					rmSync(choice.file);
-					load(ctx);
-					ctx.ui.notify("Goal confirmed and deleted.", "info");
-				} else if (action === "Resume") {
-					if (active && choice.file !== currentFile()) {
-						ctx.ui.notify("Resume or stop the current goal first.", "warning");
-						return;
-					}
-					if (choice.file !== currentFile()) renameSync(choice.file, currentFile());
-					load(ctx);
-					await start(ctx);
-				}
-				return;
-			}
 			if (command === "goal-resume") {
-				if (!active) { ctx.ui.notify("No active goal. Use /goal-review for ended goals.", "info"); return; }
+				if (!active) { ctx.ui.notify("No active goal. Use /goal <objective> to start.", "info"); return; }
 				await start(ctx);
 				return;
 			}
@@ -425,11 +394,10 @@ export default function (pi: ExtensionAPI) {
 
 	for (const [name, description] of [
 		["goal", "Start a goal: /goal <objective>"],
-		["goal-status", "Show the current goal and progress"],
+		["goal-status", "Show the current or latest archived goal and progress"],
 		["goal-pause", "Pause work and keep the current goal for later"],
 		["goal-resume", "Continue the saved goal"],
-		["goal-stop", "Stop the goal and archive it for review"],
-		["goal-review", "Resume, keep, or confirm and delete ended goals"],
+		["goal-stop", "Stop the goal and archive it"],
 	]) {
 		pi.registerCommand(name, { description, handler: (args, ctx) => handleCommand(name, args, ctx) });
 	}
