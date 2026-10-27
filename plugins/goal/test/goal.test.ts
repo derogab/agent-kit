@@ -575,6 +575,117 @@ test("/goal-pause saves progress without archiving and can resume in another ses
 	assert.ok(next.sent[0].includes(JSON.stringify(tasks)));
 });
 
+test("/goal-resume enables paused and blocked goals while busy without interrupting or queuing work", async () => {
+	for (const status of ["paused", "blocked"]) {
+		for (const state of ["busy", "queue", "settling"] as const) {
+			const h = setup();
+			await h.run("Fix the tests.");
+			await h.update(tasks);
+			if (status === "blocked") await h.boundary([assistant(BLOCKED)]);
+			await h.emit("agent_settled");
+			const before = h.state();
+			assert.equal(before.status, status);
+			if (state === "settling") await h.emit("agent_start");
+			else h[state]();
+			h.registry.getApiKeyAndHeaders = async () => assert.fail("Resuming busy work must not authenticate again.");
+			h.notifications.length = 0;
+
+			await h.command("goal-resume");
+			await h.command("goal-resume");
+			assert.deepEqual(h.state(), { ...before, status: "running" });
+			assert.match(h.render().join("\n"), /goal · running/);
+			assert.equal(h.sent.length, 1);
+			assert.equal(h.aborts(), 0);
+			assert.deepEqual(h.notifications, []);
+			await h.update(tasks);
+			if (state === "queue") {
+				assert.equal(await h.boundary([assistant(DONE)]), undefined);
+				assert.deepEqual(h.archived(), []);
+				h.queue(false);
+			}
+			const result = await h.boundary();
+			assert.equal(result.continue, true);
+			assert.ok(result.entries[0].content.includes(JSON.stringify(tasks)));
+			assert.equal(h.state().round, before.round + 1);
+			await h.boundary([assistant(DONE)]);
+			assert.equal(h.archive().status, "done");
+		}
+	}
+});
+
+test("/goal-resume is a no-op for a running goal", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	const before = h.state();
+	await h.command("goal-resume");
+	assert.deepEqual(h.state(), before);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.aborts(), 0);
+	assert.deepEqual(h.notifications, []);
+	assert.equal((await h.boundary()).continue, true);
+});
+
+test("/goal-resume while busy never revives missing or archived goals", async () => {
+	for (const status of ["none", "done", "stopped"]) {
+		const h = setup();
+		if (status !== "none") {
+			await h.run("Fix the tests.");
+			if (status === "done") await h.boundary([assistant(DONE)]);
+			else await h.command("goal-stop");
+			await h.emit("agent_settled");
+		}
+		const sent = h.sent.length;
+		const archives = h.archived();
+		const aborts = h.aborts();
+		h.busy();
+		await h.command("goal-resume");
+		assert.match(h.notifications.at(-1)!.message, /No active goal/);
+		assert.equal(h.sent.length, sent);
+		assert.equal(h.aborts(), aborts);
+		assert.deepEqual(h.archived(), archives);
+		assert.equal(existsSync(h.current), false);
+	}
+});
+
+test("errors and cancellation still pause a goal resumed during work", async () => {
+	for (const outcome of ["aborted", "error", "settled"] as const) {
+		const h = setup();
+		await h.run("Fix the tests.");
+		await h.emit("agent_settled");
+		h.busy();
+		await h.command("goal-resume");
+		assert.equal(h.state().status, "running");
+		if (outcome === "settled") await h.emit("agent_settled");
+		else assert.equal(await h.boundary([assistant(DONE)], { outcome }), undefined);
+		assert.equal(h.state().status, "paused");
+		assert.equal(await h.boundary(), undefined);
+		assert.equal(h.sent.length, 1);
+		assert.deepEqual(h.archived(), []);
+	}
+});
+
+test("a failed busy resume stays paused without interrupting current work", async (t) => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.emit("agent_settled");
+	h.busy();
+	const rename = fs.renameSync;
+	let attempts = 0;
+	t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+		if (++attempts === 1) throw new Error("Resume save failed");
+		return rename(...args);
+	});
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await h.command("goal-resume");
+	assert.equal(h.state().status, "paused");
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.aborts(), 0);
+	assert.equal(h.notifications.at(-1)!.level, "error");
+	assert.match(h.notifications.at(-1)!.message, /Resume save failed/);
+});
+
 test("/goal-pause never aborts unrelated work or changes a non-running goal", async () => {
 	for (const status of ["none", "paused", "blocked", "done"]) {
 		const h = setup();

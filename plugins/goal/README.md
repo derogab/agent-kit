@@ -30,6 +30,8 @@ Pi keeps working and checking its progress until it reports completion or a bloc
 
 You can steer a running goal: submit a message with <kbd>Enter</kbd> to give corrections or extra context at the next turn boundary, without pausing the goal. The agent is instructed to apply your newer instructions and update its checklist rather than blindly repeat the original objective. Queued input takes priority over declaring the goal complete or blocked. For less urgent input, use Pi's follow-up action (<kbd>Alt</kbd>+<kbd>Enter</kbd> by default on macOS/Linux), which waits until the agent would otherwise stop; it does not need to wait for the whole goal to finish.
 
+Resuming during a request marks the goal as running immediately without interrupting that request or queuing another prompt. Pi continues toward the goal after the current work and queued input finish. Resuming an already-running goal does nothing.
+
 Pressing <kbd>Esc</kbd> outside the expanded checklist, errors, session changes, tree navigation, and `/reload` pause the goal without losing saved progress. In another session, run `/goal-resume` from the same project directory. Goals never resume automatically.
 
 When the agent reports completion, Pi announces that the goal was reached, marks its checklist complete, and automatically archives it. After the final recap, the goal box and any open expanded checklist disappear. Use `/goal-status` to check the archived goal. No review or confirmation is needed. Stopping a goal archives it as `stopped` without marking unfinished tasks complete.

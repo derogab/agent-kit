@@ -373,13 +373,20 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Goal stopped and archived.", "info");
 				return;
 			}
-			if (active?.status === "running" || awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
-				ctx.ui.notify("Stop the current goal or wait for Pi to finish first.", "warning");
-				return;
-			}
 			if (command === "goal-resume") {
 				if (!active) { ctx.ui.notify("No active goal. Use /goal <objective> to start.", "info"); return; }
-				await start(ctx);
+				if (active.status === "running") return;
+				if (awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
+					// Adopt the current work; the settle boundary handles goal continuation.
+					active.status = "running";
+					started = true;
+					save();
+					showStatus(ctx);
+				} else await start(ctx);
+				return;
+			}
+			if (active?.status === "running" || awaitingSettle || !ctx.isIdle() || ctx.hasPendingMessages()) {
+				ctx.ui.notify("Stop the current goal or wait for Pi to finish first.", "warning");
 				return;
 			}
 			if (active) {
