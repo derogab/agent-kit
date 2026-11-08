@@ -57,6 +57,7 @@ export default function (pi: ExtensionAPI) {
 
 	let directory = "";
 	let active: Goal | undefined;
+	let replyGoal: Goal | undefined;
 	let started = false;
 	let awaitingSettle = false;
 	let archives: Goal[] = [];
@@ -89,7 +90,8 @@ export default function (pi: ExtensionAPI) {
 			...goal.tasks.slice(0, MAX_VISIBLE_TASKS).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
 			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more${ctx.mode === "tui" ? " · Ctrl+Shift+T: expand" : ""}`] : []),
 			ended(goal) ? (active ? "Check saved state; /goal-status to retry archiving" : "/goal <objective>: start another goal")
-				: goal.status === "running" ? "/goal-pause" : "/goal-resume",
+				: goal.status === "running" ? "/goal-pause"
+					: goal.status === "blocked" ? "Reply to continue · /goal-pause to stay paused" : "/goal-resume",
 		];
 		if (ctx.mode !== "tui") {
 			ctx.ui.setWidget("goal", lines);
@@ -175,9 +177,10 @@ export default function (pi: ExtensionAPI) {
 		showStatus(ctx);
 	};
 
-	const pause = (ctx: ExtensionContext) => {
+	const pause = (ctx: ExtensionContext, manual = false) => {
+		replyGoal = undefined;
 		started = false;
-		if (active?.status === "running") {
+		if (active?.status === "running" || (manual && active?.status === "blocked")) {
 			active.status = "paused";
 			try { save(); } catch (error) { fail(ctx, error); return false; }
 		}
@@ -185,12 +188,22 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	};
 
-	const load = (ctx: ExtensionContext) => {
+	const load = (ctx: ExtensionContext, adoptLegacy = false) => {
 		closeExpanded?.();
+		replyGoal = undefined;
 		started = false;
 		active = undefined;
 		archives = [];
-		directory = join(ctx.cwd, ".pi", "goals");
+		const root = join(ctx.cwd, ".pi", "goals");
+		// A stable session key survives restarts without sharing state with other sessions.
+		directory = join(root, "sessions", `session-${encodeURIComponent(ctx.sessionManager.getSessionId())}`);
+		const legacyFile = join(root, "current.json");
+		if (adoptLegacy && !existsSync(currentFile()) && existsSync(legacyFile)) {
+			readGoal(legacyFile);
+			mkdirSync(directory, { recursive: true });
+			// Move, rather than copy, so only one session can adopt the old shared goal.
+			renameSync(legacyFile, currentFile());
+		}
 		if (existsSync(currentFile())) {
 			active = readGoal(currentFile());
 			if (active.status === "running") {
@@ -273,6 +286,25 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.hasUI) ctx.ui.setWidget("goal", undefined);
 	});
 
+	pi.on("input", async (event) => {
+		replyGoal = event.source !== "extension" && (event.text.trim() || event.images?.length)
+			&& active?.status === "blocked" ? active : undefined;
+	});
+
+	pi.on("before_agent_start", async (event, ctx) => {
+		const goal = replyGoal;
+		replyGoal = undefined;
+		// Wait until Pi accepts the reply; handled input or failed authentication must not resume work.
+		if (!goal || active !== goal || goal.status !== "blocked" || !("prompt" in event) || ctx.signal?.aborted) return;
+		try {
+			goal.status = "running";
+			started = true;
+			save();
+			showStatus(ctx);
+			return { message: { customType: "goal", content: prompt(goal), display: false } };
+		} catch (error) { fail(ctx, error); }
+	});
+
 	// Pi can report idle before all agent_settled handlers have run.
 	pi.on("agent_start", async () => { awaitingSettle = true; });
 
@@ -300,7 +332,7 @@ export default function (pi: ExtensionAPI) {
 				active.status = "blocked";
 				save();
 				showStatus(ctx);
-				ctx.ui.notify("Goal blocked. Resolve the blocker, then /goal-resume.", "warning");
+				ctx.ui.notify("Goal blocked. Reply to continue automatically, or use /goal-resume after resolving the blocker.", "warning");
 				return;
 			}
 			// Let already-requested work run first; never add a competing follow-up.
@@ -349,8 +381,8 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Usage: /goal <objective>. Use /goal-status to show the current goal.", "info");
 				return;
 			}
-			// Reload while idle so a new session or manual file repair is picked up.
-			if (active?.status !== "running") load(ctx);
+			// Reload this session's saved state so manual file repairs are picked up.
+			if (active?.status !== "running") load(ctx, command === "goal-resume");
 			if (command === "goal-status") {
 				const goal = active ?? archives.at(-1);
 				ctx.ui.notify(goal
@@ -359,9 +391,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			if (command === "goal-pause") {
-				if (active?.status !== "running") { ctx.ui.notify("No running goal.", "info"); return; }
+				if (active?.status !== "running" && active?.status !== "blocked") { ctx.ui.notify("No running goal.", "info"); return; }
 				const abort = started;
-				const saved = pause(ctx);
+				const saved = pause(ctx, true);
 				if (abort) ctx.abort();
 				if (saved) ctx.ui.notify("Goal paused. Use /goal-resume to continue.", "info");
 				return;

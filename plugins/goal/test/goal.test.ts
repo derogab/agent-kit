@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -26,10 +27,11 @@ const assistant = (text: string, stopReason = "stop") => ({
 	stopReason,
 });
 
-const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; factory?: typeof goal } = {}) => {
+const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?: EventEmitter; factory?: typeof goal } = {}) => {
 	const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "pi-goal-test-"));
 	if (!options.cwd) directories.push(cwd);
 	const mode = options.mode ?? "tui";
+	const sessionId = options.sessionId ?? randomUUID();
 	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
 	const tools = new Map<string, any>();
@@ -46,6 +48,7 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 	const registry = { getApiKeyAndHeaders: async (): Promise<any> => ({ ok: true, apiKey: "test" }) };
 	const ctx = {
 		cwd, mode,
+		sessionManager: { getSessionId: () => sessionId },
 		hasUI: mode === "tui" || mode === "rpc",
 		model: { id: "test-model" },
 		modelRegistry: registry,
@@ -81,7 +84,7 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 		context: { contextMessages: messages, pendingMessages: [], canContinue: false },
 		...overrides,
 	});
-	const directory = join(cwd, ".pi", "goals");
+	const directory = join(cwd, ".pi", "goals", "sessions", `session-${encodeURIComponent(sessionId)}`);
 	const current = join(directory, "current.json");
 	const archiveDir = join(directory, "archive");
 	const archived = () => existsSync(archiveDir) ? readdirSync(archiveDir).filter((name) => name.endsWith(".json")).sort() : [];
@@ -91,7 +94,13 @@ const setup = (options: { cwd?: string; mode?: string; bus?: EventEmitter; facto
 	};
 	return {
 		ctx, api, registry, handlers, commands, tools, shortcuts, sent, notifications, widgets, emit, boundary,
-		cwd, directory, current, archiveDir, archived, render, tui,
+		cwd, sessionId, directory, current, archiveDir, archived, render, tui,
+		reply: async (text = "The blocker is resolved.", source = "interactive", images?: any[]) => {
+			await emit("input", { text, source, images });
+			const result = await emit("before_agent_start", { prompt: text, messageType: "user", images });
+			await emit("agent_start");
+			return result;
+		},
 		expand: () => shortcuts.get("ctrl+shift+t")!.handler(ctx),
 		renderExpanded: (width = 100): string[] => expanded?.render(width) ?? [],
 		inputExpanded: (data: string) => expanded?.handleInput(data),
@@ -132,7 +141,7 @@ test("duplicate install paths register only one tool, command set and lifecycle"
 		assert.equal(setup({ bus }).tools.size, 0, "session changes must retain the claim");
 		// Pi removes runtime subscriptions on /reload, but keeps the shared bus.
 		bus.removeAllListeners();
-		const reloaded = setup({ bus, cwd: first.cwd, factory: factories[1] });
+		const reloaded = setup({ bus, cwd: first.cwd, sessionId: first.sessionId, factory: factories[1] });
 		assert.deepEqual([...reloaded.commands.keys()], [...first.commands.keys()]);
 		assert.deepEqual([...reloaded.tools.keys()], ["goal_progress"]);
 		assert.equal(setup({ bus, factory: factories[0] }).tools.size, 0);
@@ -264,12 +273,12 @@ test("checklist rows stay compact, survive pause reloads and disappear after com
 		assert.equal(h.render().length, mode === "tui" ? 5 : 3);
 		await h.update(tasks);
 		await h.command("goal-pause");
-		const next = setup({ cwd: h.cwd, mode });
+		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await next.emit("session_start");
 		assert.ok(rows(next).includes("✓ Fix tests") && rows(next).includes("· Run full suite"));
 		await next.command("goal-resume");
 		await next.boundary([assistant(DONE)]);
-		const archived = setup({ cwd: h.cwd, mode });
+		const archived = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await archived.emit("session_start");
 		assert.deepEqual(archived.render(), []);
 		assert.deepEqual(archived.archive().tasks, completedTasks);
@@ -294,14 +303,14 @@ test("large checklists have a bounded preview without losing saved or resumed ta
 			assert.ok((await h.boundary()).entries[0].content.includes(JSON.stringify(checklist)));
 		}
 		await h.command("goal-pause");
-		const next = setup({ cwd: h.cwd, mode });
+		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await next.emit("session_start");
 		assert.ok(next.render().some((line) => line.includes("… 90 more")));
 		await next.command("goal-resume");
 		assert.ok(next.sent[0].includes(JSON.stringify(checklist)));
 		await next.boundary([assistant(DONE)]);
 		assert.deepEqual(next.archive().tasks, checklist.map((task) => ({ ...task, done: true })));
-		const archived = setup({ cwd: h.cwd, mode });
+		const archived = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await archived.emit("session_start");
 		assert.deepEqual(archived.render(), []);
 		assert.deepEqual(archived.archive().tasks, checklist.map((task) => ({ ...task, done: true })));
@@ -465,7 +474,7 @@ for (const mode of ["tui", "rpc", "json"]) {
 		assert.equal(h.aborts(), 0);
 		await assert.rejects(h.update(tasks), /No running goal/);
 
-		const next = setup({ cwd: h.cwd, mode });
+		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await next.emit("session_start");
 		for (const instance of [h, next]) assert.deepEqual(instance.render(), []);
 		assert.equal(next.sent.length, 0);
@@ -484,7 +493,10 @@ for (const mode of ["tui", "rpc", "json"]) {
 }
 
 for (const mode of ["tui", "rpc"]) {
-	test(`completed goals stay hidden while stopped archives remain visible in ${mode} mode`, async () => {
+	test(`completed goals stay hidden while stopped archives remain visible in ${mode} mode`, async (t) => {
+		// These represent separate runs; avoid random archive ordering within one clock tick.
+		let now = Date.now();
+		t.mock.method(Date, "now", () => now++);
 		const h = setup({ mode });
 		await h.run("First goal.");
 		await h.boundary([assistant(DONE)]);
@@ -501,7 +513,7 @@ for (const mode of ["tui", "rpc"]) {
 		assert.equal(h.notifications.at(-1)!.message, "Goal stopped and archived.");
 		assert.match(h.render().join("\n"), /stopped · archived · 1\/2 tasks done/);
 
-		const next = setup({ cwd: h.cwd, mode });
+		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await next.emit("session_start");
 		assert.match(next.render().join("\n"), /stopped · archived · 1\/2 tasks done/);
 		assert.match(next.render().join("\n"), /Second goal/);
@@ -512,7 +524,7 @@ for (const mode of ["tui", "rpc"]) {
 	});
 }
 
-test("blocked goals retain their checklist and can resume in a fresh session", async () => {
+test("blocked goals retain their checklist and can resume after reopening their session", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
 	await h.update(tasks);
@@ -521,7 +533,7 @@ test("blocked goals retain their checklist and can resume in a fresh session", a
 	assert.equal(h.state().status, "blocked");
 	assert.equal(h.archived().length, 0);
 	assert.match(h.render().join("\n"), /blocked/);
-	const next = setup({ cwd: h.cwd });
+	const next = setup({ cwd: h.cwd, sessionId: h.sessionId });
 	await next.emit("session_start");
 	assert.equal(await next.boundary(), undefined);
 	await next.command("goal-resume");
@@ -549,7 +561,7 @@ for (const messages of [
 	});
 }
 
-test("/goal-pause saves progress without archiving and can resume in another session", async () => {
+test("/goal-pause saves progress without archiving and can resume after reopening the session", async () => {
 	const h = setup();
 	await h.run("Fix the tests.");
 	await h.update(tasks);
@@ -568,7 +580,7 @@ test("/goal-pause saves progress without archiving and can resume in another ses
 	await h.command("goal-pause");
 	assert.equal(h.aborts(), 1);
 	assert.equal(h.sent.length, 1);
-	const next = setup({ cwd: h.cwd });
+	const next = setup({ cwd: h.cwd, sessionId: h.sessionId });
 	await next.emit("session_start");
 	await next.command("goal-resume");
 	assert.deepEqual(next.state(), before);
@@ -686,8 +698,8 @@ test("a failed busy resume stays paused without interrupting current work", asyn
 	assert.match(h.notifications.at(-1)!.message, /Resume save failed/);
 });
 
-test("/goal-pause never aborts unrelated work or changes a non-running goal", async () => {
-	for (const status of ["none", "paused", "blocked", "done"]) {
+test("/goal-pause never aborts unrelated work or changes a paused or ended goal", async () => {
+	for (const status of ["none", "paused", "done"]) {
 		const h = setup();
 		if (status !== "none") {
 			await h.run("Fix the tests.");
@@ -803,7 +815,7 @@ test("a process restart restores running goals paused, never resumes automatical
 	await h.run("Fix the tests.");
 	await h.update(tasks);
 	await h.boundary();
-	const next = setup({ cwd: h.cwd });
+	const next = setup({ cwd: h.cwd, sessionId: h.sessionId });
 	await next.emit("session_start");
 	assert.equal(next.sent.length, 0);
 	assert.match(next.render().join("\n"), /paused/);
@@ -1068,6 +1080,209 @@ test("malformed archives are reported and preserved without blocking valid goals
 	assert.equal(h.sent.length, 1);
 	assert.equal(readFileSync(file, "utf8"), "broken");
 	assert.equal(h.notifications[0].level, "warning");
+});
+
+test("different sessions run independent goals in the same directory", async () => {
+	const first = setup();
+	await first.run("First session's goal.");
+	await first.update(tasks);
+	const before = first.state();
+	const second = setup({ cwd: first.cwd });
+	await second.emit("session_start");
+	await second.command("goal-resume");
+	assert.deepEqual(first.state(), before, "opening another session must not pause the first");
+	assert.deepEqual(second.render(), []);
+	assert.equal(second.sent.length, 0);
+	await second.run("Second session's goal.");
+	await Promise.all([first.update(tasks), second.update([{ text: "Other task", done: false }])]);
+	assert.equal((await first.boundary()).continue, true);
+	assert.equal((await second.boundary()).continue, true);
+	assert.deepEqual(first.state().tasks, tasks);
+	assert.deepEqual(second.state().tasks, [{ text: "Other task", done: false }]);
+	await first.command("goal-pause");
+	assert.equal(second.state().status, "running");
+	await second.command("goal-stop");
+	assert.equal(first.state().status, "paused");
+	assert.deepEqual(first.archived(), []);
+	assert.equal(second.archive().instruction, "Second session's goal.");
+	await second.emit("session_shutdown");
+	await first.emit("agent_settled");
+	await first.command("goal-resume");
+	await first.boundary([assistant(DONE)]);
+	assert.equal(first.archive().instruction, "First session's goal.");
+	const third = setup({ cwd: first.cwd });
+	await third.emit("session_start");
+	await third.command("goal-status");
+	assert.match(third.notifications.at(-1)!.message, /No active goal/);
+	assert.deepEqual(third.render(), []);
+});
+
+test("custom session IDs cannot escape their goal directory or collide when encoded", async () => {
+	const first = setup({ sessionId: "../other/session" });
+	const second = setup({ cwd: first.cwd, sessionId: "..%2Fother%2Fsession" });
+	await first.run("First goal.");
+	await second.run("Second goal.");
+	assert.equal(first.state().instruction, "First goal.");
+	assert.equal(second.state().instruction, "Second goal.");
+	assert.deepEqual(readdirSync(join(first.cwd, ".pi", "goals")), ["sessions"]);
+});
+
+test("legacy shared goals are adopted only by an explicit resume and only once", async () => {
+	const first = setup();
+	const second = setup({ cwd: first.cwd });
+	const root = join(first.cwd, ".pi", "goals");
+	const legacy = join(root, "current.json");
+	mkdirSync(join(root, "archive"), { recursive: true });
+	const oldArchive = join(root, "archive", "old.json");
+	const saved = { instruction: "Legacy goal.", status: "blocked", round: 3, tasks };
+	writeFileSync(legacy, JSON.stringify(saved));
+	writeFileSync(oldArchive, JSON.stringify({ ...saved, status: "done" }));
+	await first.emit("session_start");
+	await second.emit("session_start");
+	assert.deepEqual(first.render(), []);
+	assert.deepEqual(second.render(), []);
+	assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), saved);
+	await Promise.all([first.command("goal-resume"), second.command("goal-resume")]);
+	assert.equal(existsSync(legacy), false);
+	assert.deepEqual(first.state(), { ...saved, status: "running" });
+	assert.equal(first.sent.length, 1);
+	assert.equal(second.sent.length, 0);
+	assert.equal(existsSync(second.current), false);
+	await second.run("An independent new goal.");
+	assert.equal(second.state().instruction, "An independent new goal.");
+	assert.equal(JSON.parse(readFileSync(oldArchive, "utf8")).status, "done");
+});
+
+test("starting a new goal leaves legacy state intact and malformed legacy goals cannot be adopted", async () => {
+	const h = setup();
+	const legacy = join(h.cwd, ".pi", "goals", "current.json");
+	mkdirSync(join(h.cwd, ".pi", "goals"), { recursive: true });
+	writeFileSync(legacy, "{broken");
+	await h.command("goal-resume");
+	assert.equal(h.notifications.at(-1)!.level, "error");
+	assert.equal(existsSync(h.current), false);
+	await h.run("New session goal.");
+	assert.equal(h.state().instruction, "New session goal.");
+	assert.equal(readFileSync(legacy, "utf8"), "{broken");
+});
+
+test("human replies unfreeze blocked goals without another prompt or resume command", async () => {
+	for (const source of ["interactive", "rpc"]) {
+		const h = setup({ mode: source === "rpc" ? "rpc" : "tui" });
+		await h.run("Fix the tests.");
+		await h.update(tasks);
+		await h.boundary([assistant(`Which tests?\n${BLOCKED}`)]);
+		await h.emit("agent_settled");
+		assert.match(h.render().join("\n"), /Reply to continue/);
+		assert.match(h.notifications.at(-1)!.message, /Reply.*resume/i);
+		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode: h.ctx.mode });
+		await next.emit("session_start");
+		assert.equal(next.state().status, "blocked");
+		const result = await next.reply("Check the integration tests too.", source);
+		assert.equal(next.state().status, "running");
+		assert.match(result.message.content, /Fix the tests/);
+		assert.ok(result.message.content.includes(JSON.stringify(tasks)));
+		assert.match(result.message.content, /newer user instructions/);
+		assert.equal(result.message.display, false);
+		assert.equal(next.sent.length, 0, "the user's reply is already starting work");
+		assert.equal(next.aborts(), 0);
+		await next.update(tasks);
+		assert.equal((await next.boundary()).continue, true);
+		await next.boundary([assistant(BLOCKED)]);
+		await next.emit("agent_settled");
+		await next.reply("Here is the remaining answer.", source);
+		await next.boundary([assistant(DONE)]);
+		assert.deepEqual(next.archive().tasks, completedTasks);
+	}
+});
+
+test("extension prompts and empty input do not unfreeze blocked goals; image replies do", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.boundary([assistant(BLOCKED)]);
+	await h.emit("agent_settled");
+	for (const [text, source] of [["Scheduled work", "extension"], ["  ", "interactive"]]) {
+		assert.equal(await h.reply(text, source), undefined);
+		assert.equal(h.state().status, "blocked");
+		assert.equal(await h.boundary([assistant(DONE)]), undefined);
+		await h.emit("agent_settled");
+	}
+	await h.reply("", "interactive", [{ type: "image", data: "test", mimeType: "image/png" }]);
+	assert.equal(h.state().status, "running");
+	assert.equal((await h.boundary()).continue, true);
+});
+
+test("blocked goals resume only when the reply starts a run", async () => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.boundary([assistant(BLOCKED)]);
+	await h.emit("agent_settled");
+	await h.emit("input", { text: "A reply handled by another extension", source: "interactive" });
+	assert.equal(h.state().status, "blocked");
+	assert.equal(await h.emit("before_agent_start", { messageType: "custom", message: {} }), undefined);
+	assert.equal(h.state().status, "blocked");
+	await h.reply("An unrelated extension prompt", "extension");
+	assert.equal(h.state().status, "blocked");
+});
+
+test("manual pause overrides a blocker and replies never restart paused, stopped or completed goals", async () => {
+	for (const action of ["goal-pause", "goal-stop", "done", "escape"]) {
+		const h = setup();
+		await h.run("Fix the tests.");
+		await h.update(tasks);
+		if (action === "done") await h.boundary([assistant(DONE)]);
+		else if (action !== "escape") await h.boundary([assistant(BLOCKED)]);
+		await h.emit("agent_settled");
+		if (action.startsWith("goal-")) await h.command(action);
+		const state = existsSync(h.current) ? h.state() : undefined;
+		if (state) assert.equal(state.status, "paused");
+		assert.equal(h.aborts(), 0, "pausing a blocker must not abort unrelated work");
+		assert.equal(await h.reply(), undefined);
+		assert.equal(await h.boundary([assistant(DONE)]), undefined);
+		assert.deepEqual(existsSync(h.current) ? h.state() : undefined, state);
+		assert.equal(h.sent.length, 1);
+		await h.emit("agent_settled");
+		if (state) {
+			await h.command("goal-resume");
+			assert.equal(h.state().status, "running");
+		}
+	}
+});
+
+test("cancellation and errors still pause automatically resumed goals", async () => {
+	for (const outcome of ["aborted", "error"] as const) {
+		const h = setup();
+		await h.run("Fix the tests.");
+		await h.boundary([assistant(BLOCKED)]);
+		await h.emit("agent_settled");
+		await h.reply();
+		assert.equal(await h.boundary([assistant(DONE)], { outcome }), undefined);
+		await h.emit("agent_settled");
+		assert.equal(h.state().status, "paused");
+		assert.equal(await h.reply(), undefined);
+		assert.equal(await h.boundary(), undefined);
+		assert.deepEqual(h.archived(), []);
+	}
+});
+
+test("a failed automatic resume pauses safely without queuing work", async (t) => {
+	const h = setup();
+	await h.run("Fix the tests.");
+	await h.boundary([assistant(BLOCKED)]);
+	await h.emit("agent_settled");
+	const rename = fs.renameSync;
+	let attempts = 0;
+	t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+		if (++attempts === 1) throw new Error("Automatic resume save failed");
+		return rename(...args);
+	});
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	assert.equal(await h.reply(), undefined);
+	assert.equal(h.state().status, "paused");
+	assert.equal(await h.boundary(), undefined);
+	assert.equal(h.sent.length, 1);
+	assert.match(h.notifications.at(-1)!.message, /Automatic resume save failed/);
 });
 
 test("saved goals stay isolated to their project directory", async () => {
