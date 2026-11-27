@@ -42,10 +42,9 @@ When the agent reports completion, Pi announces that the goal was reached, marks
 
 ## Saved goals
 
-Files live under the directory where you start Pi:
-
-- `.pi/goals/sessions/session-<id>/current.json`: a session's current objective, status, round, and checklist.
-- `.pi/goals/sessions/session-<id>/archive/`: that session's completed or stopped goals retained as history.
+- Active goals stay in `.pi/goals/sessions/session-<id>/current.json` under the directory where you start Pi.
+- Completed and stopped goals go to `/tmp/pi-goals-<uid>/<workspace-hash>/session-<id>/` on macOS and Linux. On Windows, they go under `pi-goals` in the user's temporary directory. Each workspace and session has separate history. The OS may clear temporary files; copy archives elsewhere if you need to keep them.
+- Existing per-session archives in `.pi/goals/sessions/session-<id>/archive/` remain readable in place. No new archives are written there.
 
 Blocked and paused goals stay saved until resumed or stopped. Archived goals are not resumed or deleted by the plugin; start a new goal for further work. When no goal is active, this session's latest archive and its checklist remain visible only if that goal was stopped; completed goals stay hidden, including after a restart. These files do not contain the conversation; on resume, Pi uses the objective, checklist, and workspace to continue.
 

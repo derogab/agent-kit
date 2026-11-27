@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type {
@@ -18,6 +18,7 @@ import goal from "../extensions/goal.ts";
 
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
+const archiveRoot = process.geteuid ? `/tmp/pi-goals-${process.geteuid()}` : join(tmpdir(), "pi-goals");
 const directories: string[] = [];
 after(() => directories.forEach((cwd) => rmSync(cwd, { recursive: true, force: true })));
 
@@ -86,7 +87,10 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 	});
 	const directory = join(cwd, ".pi", "goals", "sessions", `session-${encodeURIComponent(sessionId)}`);
 	const current = join(directory, "current.json");
-	const archiveDir = join(directory, "archive");
+	const workspace = createHash("sha256").update(fs.realpathSync(cwd)).digest("hex");
+	const workspaceArchive = join(archiveRoot, workspace);
+	if (!options.cwd) directories.push(workspaceArchive);
+	const archiveDir = join(workspaceArchive, `session-${encodeURIComponent(sessionId)}`);
 	const archived = () => existsSync(archiveDir) ? readdirSync(archiveDir).filter((name) => name.endsWith(".json")).sort() : [];
 	const render = (width = 100, theme = { fg: (_color: string, text: string) => text }): string[] => {
 		const widget = widgets.get("goal");
@@ -181,6 +185,7 @@ test("does nothing and creates no files without an explicit goal", async () => {
 	for (const name of ["goal-pause", "goal-resume", "goal-stop"]) await h.command(name);
 	assert.equal(h.sent.length, 0);
 	assert.equal(existsSync(h.directory), false);
+	assert.equal(existsSync(h.archiveDir), false);
 	assert.deepEqual(h.render(), []);
 	await assert.rejects(h.update(tasks), /No running goal/);
 });
@@ -953,7 +958,9 @@ test("send failures pause the goal", async () => {
 });
 
 test("invalid saved state is reported and never overwritten", async () => {
-	for (const value of ["{broken", "null", '{"instruction":"hello"}']) {
+	for (const value of ["{broken", "null", '{"instruction":"hello"}', JSON.stringify({
+		instruction: "Invalid destination", status: "done", round: 1, tasks: [], archiveId: "../escape",
+	})]) {
 		const h = setup();
 		mkdirSync(h.directory, { recursive: true });
 		writeFileSync(h.current, value);
@@ -971,12 +978,14 @@ for (const status of ["done", "stopped"]) {
 		await h.run("Fix the tests.");
 		await h.update(tasks);
 		// Make the archive destination unwritable without depending on chmod or user privileges.
+		mkdirSync(dirname(h.archiveDir), { recursive: true, mode: 0o700 });
 		writeFileSync(h.archiveDir, "not a directory");
 		if (status === "done") await h.boundary([assistant(DONE)]);
 		else await h.command("goal-stop");
 		assert.equal(await h.boundary(), undefined);
 		const expected = { instruction: "Fix the tests.", status, round: 1, tasks: status === "done" ? completedTasks : tasks };
-		assert.deepEqual(h.state(), expected);
+		const { archiveId, ...pending } = h.state();
+		assert.deepEqual(pending, expected);
 		assert.equal(h.notifications.at(-1)!.level, "error");
 		assert.ok(!h.notifications.some(({ message }) => /Goal reached and archived|Goal stopped and archived/.test(message)));
 		assert.match(h.render().join("\n"), /archive pending/);
@@ -984,7 +993,7 @@ for (const status of ["done", "stopped"]) {
 		rmSync(h.archiveDir);
 		await h.command("goal-status");
 		assert.equal(existsSync(h.current), false);
-		assert.equal(h.archived().length, 1);
+		assert.deepEqual(h.archived(), [`${archiveId}.json`]);
 		assert.deepEqual(h.archive(), expected);
 		if (status === "done") assert.deepEqual(h.render(), []);
 		else assert.match(h.render().join("\n"), /stopped · archived/);
@@ -1073,13 +1082,79 @@ test("queued progress cannot recreate a stopped goal or modify a replacement", a
 
 test("malformed archives are reported and preserved without blocking valid goals", async () => {
 	const h = setup();
-	mkdirSync(h.archiveDir, { recursive: true });
+	mkdirSync(h.archiveDir, { recursive: true, mode: 0o700 });
 	const file = join(h.archiveDir, "broken.json");
 	writeFileSync(file, "broken");
 	await h.run("Fix the tests.");
 	assert.equal(h.sent.length, 1);
 	assert.equal(readFileSync(file, "utf8"), "broken");
 	assert.equal(h.notifications[0].level, "warning");
+});
+
+test("old session archives remain readable; new goals stay out of the workspace archive", async () => {
+	const h = setup();
+	const legacyDir = join(h.directory, "archive");
+	mkdirSync(legacyDir, { recursive: true });
+	const old = JSON.stringify({ instruction: "Local history.", status: "stopped", round: 1, tasks });
+	writeFileSync(join(legacyDir, "old.json"), old);
+	await h.command("goal-status");
+	assert.match(h.notifications.at(-1)!.message, /stopped, archived.*Local history/);
+	await h.run("New history.");
+	await h.command("goal-stop");
+	assert.equal(h.archive().instruction, "New history.");
+	await h.command("goal-status");
+	assert.match(h.notifications.at(-1)!.message, /stopped, archived.*New history/);
+	assert.deepEqual(readdirSync(legacyDir), ["old.json"]);
+	assert.equal(readFileSync(join(legacyDir, "old.json"), "utf8"), old);
+
+	const other = setup({ sessionId: h.sessionId });
+	await other.command("goal-status");
+	assert.match(other.notifications.at(-1)!.message, /No active goal/);
+});
+
+test("a non-private archive root is refused without losing the goal", { skip: !process.geteuid }, async (t) => {
+	const h = setup();
+	await h.run("Keep this private.");
+	const unsafe = fs.statSync(h.directory);
+	unsafe.mode |= 0o077;
+	const lstat = fs.lstatSync;
+	t.mock.method(fs, "lstatSync", (...args: Parameters<typeof lstat>) => args[0] === archiveRoot ? unsafe : lstat(...args));
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await h.command("goal-stop");
+	assert.match(h.notifications.at(-1)!.message, /Expected a private goal archive directory/);
+	assert.equal(h.state().status, "stopped");
+	assert.equal(existsSync(h.archiveDir), false);
+});
+
+test("archiving across filesystems retries an interrupted source removal without duplicating history", async (t) => {
+	const h = setup();
+	await h.run("Move this goal.");
+	const rename = fs.renameSync;
+	t.mock.method(fs, "renameSync", (from: string, to: string) => {
+		if (dirname(from) !== dirname(to)) throw Object.assign(new Error("Cross-device rename"), { code: "EXDEV" });
+		rename(from, to);
+	});
+	const remove = fs.rmSync;
+	t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => {
+		if (args[0] === h.current) throw new Error("Source removal failed");
+		remove(...args);
+	});
+	syncBuiltinESMExports();
+	const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
+	t.after(restore);
+	await h.command("goal-stop");
+	assert.match(h.notifications.at(-1)!.message, /Source removal failed/);
+	assert.equal(h.state().status, "stopped");
+	const files = h.archived();
+	assert.equal(files.length, 1);
+	restore();
+	const next = setup({ cwd: h.cwd, sessionId: h.sessionId });
+	await next.emit("session_start");
+	assert.deepEqual(next.archived(), files);
+	assert.equal(next.archive().instruction, "Move this goal.");
+	assert.deepEqual(readdirSync(h.directory), []);
+	assert.equal(next.sent.length, 0);
 });
 
 test("different sessions run independent goals in the same directory", async () => {
