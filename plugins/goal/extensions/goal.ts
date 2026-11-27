@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, SelectList, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Key, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
-const MAX_VISIBLE_TASKS = 10;
+const TASKS_PER_PAGE = 5;
 const REGISTRATION_EVENT = "@derogab/pi-goal:registration";
 
 const uid = process.geteuid?.();
@@ -79,7 +79,7 @@ export default function (pi: ExtensionAPI) {
 	let started = false;
 	let awaitingSettle = false;
 	let archives: Goal[] = [];
-	let closeExpanded: (() => void) | undefined;
+	let page = 0;
 
 	const currentFile = () => join(directory, "current.json");
 	const save = (dir = directory, name = "current.json", goal = active) => {
@@ -94,19 +94,25 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const showStatus = (ctx: ExtensionContext) => {
+	const showStatus = (ctx: ExtensionContext, pageDelta = 0) => {
 		if (!ctx.hasUI) return;
 		const goal = active ?? archives.at(-1);
 		if (!goal || (!active && goal.status === "done")) {
 			ctx.ui.setWidget("goal", undefined);
 			return;
 		}
+		const pages = Math.ceil(goal.tasks.length / TASKS_PER_PAGE);
+		const nextPage = Math.max(0, Math.min(page + pageDelta, pages - 1));
+		if (pageDelta && nextPage === page) return;
+		page = nextPage;
+		const start = page * TASKS_PER_PAGE;
 		const status = ended(goal) ? `${goal.status} · ${active ? "archive pending" : "archived"}` : goal.status;
 		const lines = [
 			`goal · ${status} · ${progress(goal)} · round ${goal.round}`,
 			singleLine(goal.instruction),
-			...goal.tasks.slice(0, MAX_VISIBLE_TASKS).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
-			...(goal.tasks.length > MAX_VISIBLE_TASKS ? [`… ${goal.tasks.length - MAX_VISIBLE_TASKS} more${ctx.mode === "tui" ? " · Ctrl+Shift+T: expand" : ""}`] : []),
+			...goal.tasks.slice(start, start + TASKS_PER_PAGE).map((task) => `${task.done ? "✓" : "·"} ${singleLine(task.text)}`),
+			...(pages > 1 ? [ctx.mode === "tui" ? `Page ${page + 1}/${pages} · Ctrl+Shift+←/→`
+				: `… ${goal.tasks.length - TASKS_PER_PAGE} more`] : []),
 			ended(goal) ? (active ? "Check saved state; /goal-status to retry archiving" : "/goal <objective>: start another goal")
 				: goal.status === "running" ? "/goal-pause"
 					: goal.status === "blocked" ? "Reply to continue · /goal-pause to stay paused" : "/goal-resume",
@@ -133,56 +139,14 @@ export default function (pi: ExtensionAPI) {
 		}), { placement: "aboveEditor" });
 	};
 
-	pi.registerShortcut(Key.ctrlShift("t"), {
-		description: "Expand or collapse the full goal checklist",
-		handler: async (ctx) => {
-			if (closeExpanded) { closeExpanded(); return; }
-			const goal = active ?? archives.at(-1);
-			if (ctx.mode !== "tui" || !ctx.hasUI || !goal || goal.tasks.length <= MAX_VISIBLE_TASKS) return;
-			await ctx.ui.custom<void>((tui, theme, keys, done) => {
-				const close = () => {
-					closeExpanded = undefined;
-					done();
-				};
-				closeExpanded = close;
-				let list: SelectList;
-				let selected = 0;
-				let pageSize = 1;
-				return {
-					render(width) {
-						pageSize = Math.max(1, tui.terminal.rows - 8);
-						list = new SelectList(goal.tasks.map((task, i) => ({
-							value: String(i), label: `${task.done ? "✓" : "·"} ${singleLine(task.text)}`,
-						})), pageSize, {
-							selectedPrefix: (text) => theme.fg("accent", text),
-							selectedText: (text) => theme.fg("accent", text),
-							description: (text) => theme.fg("muted", text),
-							scrollInfo: (text) => theme.fg("dim", text),
-							noMatch: () => theme.fg("muted", "No tasks"),
-						});
-						selected = Math.min(selected, Math.max(0, goal.tasks.length - 1));
-						list.setSelectedIndex(selected);
-						list.onCancel = close;
-						return [
-							theme.fg("accent", truncateToWidth(`goal · ${goal.status} · ${progress(goal)}`, width)),
-							theme.fg("muted", truncateToWidth(singleLine(goal.instruction), width)),
-							...list.render(width).map((line) => truncateToWidth(line, width)),
-							theme.fg("dim", truncateToWidth("↑↓ / PgUp / PgDn: scroll · Ctrl+Shift+T / Esc: collapse", width)),
-						];
-					},
-					handleInput(data) {
-						if (matchesKey(data, Key.ctrlShift("t"))) close();
-						else if (keys.matches(data, "tui.select.pageUp")) list?.setSelectedIndex(Math.max(0, selected - pageSize));
-						else if (keys.matches(data, "tui.select.pageDown")) list?.setSelectedIndex(Math.min(goal.tasks.length - 1, selected + pageSize));
-						else list?.handleInput(data);
-						selected = Number(list?.getSelectedItem()?.value ?? 0);
-						tui.requestRender();
-					},
-					invalidate() {},
-				};
-			}, { overlay: true });
-		},
-	});
+	for (const arrow of ["left", "right"] as const) {
+		pi.registerShortcut(Key.ctrlShift(arrow), {
+			description: `Show the ${arrow === "left" ? "previous" : "next"} goal checklist page`,
+			handler: (ctx) => {
+				if (ctx.mode === "tui") showStatus(ctx, arrow === "left" ? -1 : 1);
+			},
+		});
+	}
 
 	const fail = (ctx: ExtensionContext, error: unknown) => {
 		started = false;
@@ -207,7 +171,6 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const load = (ctx: ExtensionContext, adoptLegacy = false) => {
-		closeExpanded?.();
 		replyGoal = undefined;
 		started = false;
 		active = undefined;
@@ -262,7 +225,6 @@ export default function (pi: ExtensionAPI) {
 		rmSync(currentFile());
 		archives.push(record);
 		active = undefined;
-		if (status === "done") closeExpanded?.();
 		showStatus(ctx);
 	};
 
@@ -294,17 +256,18 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		page = 0;
 		awaitingSettle = false;
 		pause(ctx);
 		try { load(ctx); } catch (error) { fail(ctx, error); }
 	});
 	pi.on("session_tree", async (_event, ctx) => {
+		page = 0;
 		awaitingSettle = false;
 		pause(ctx);
 		try { load(ctx); } catch (error) { fail(ctx, error); }
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
-		closeExpanded?.();
 		awaitingSettle = false;
 		pause(ctx);
 		active = undefined;
