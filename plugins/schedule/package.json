@@ -1,7 +1,7 @@
 {
   "name": "@derogab/pi-schedule",
-  "version": "0.1.0",
-  "description": "Schedule future and recurring tasks in Pi",
+  "version": "0.2.0",
+  "description": "Schedule future, recurring, and event-triggered tasks in Pi",
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts"
