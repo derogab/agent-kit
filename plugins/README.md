@@ -11,7 +11,7 @@
 | [goal](./goal/) | Pi | Keeps working until a goal is reached |
 | [inkypal](./inkypal/) | Claude Code | Notifies InkyPal when a task finish |
 | [later](./later/) | Pi | Save prompts and run them later in the session |
-| [schedule](./schedule/) | Pi | Schedule future and recurring tasks |
+| [schedule](./schedule/) | Pi | Schedule future, recurring, and event-triggered tasks |
 | [sounds](./sounds/) | Claude Code | OS-native sound alerts on events like task completion |
 
 ## Install
