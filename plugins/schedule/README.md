@@ -26,7 +26,7 @@ pi -e ./plugins/schedule
 - `/schedule on file created build/ready.txt -- Review the build results`: run once when a local path appears.
 - `/schedule on file changed src/config.ts -- Run the relevant tests`: run once when a local path changes.
 - `/schedule on file deleted build.lock -- Check the build results`: run once when a local path disappears.
-- `/schedule on tool bash error -- Investigate the failed command`: run once after a matching Pi tool completion. Outcomes are `any`, `success`, or `error`.
+- `/schedule on tool bash error -- Investigate the failed command`: run once after a matching Pi tool completion. The outcome (`any`, `success`, or `error`) is required in this direct form. Output filtering (`contains`) requires the `schedule` tool; it is not supported by the direct command.
 - `/schedule tomorrow at noon remind me to review the PR`: ask Pi to interpret a natural-language request and save it using the scheduling tool. This needs a model and credentials; ambiguous requests may require clarification.
 - `/schedule`: open the saved schedules. Pick one to **Pause**, **Resume**, or **Remove** it. Press <kbd>Esc</kbd> to leave it unchanged.
 
@@ -41,7 +41,7 @@ The footer shows `⏲ schedule:` with the number of active and saved schedules. 
 Listeners run **once**, on the next matching event after being armed. They do not run immediately just because a path already exists or a tool failed earlier. Use `/schedule` or the `schedule` tool to list, pause, resume, and remove them. The list shows what each listener watches and whether it is listening, triggered, or paused.
 
 - **Local paths:** `created` means absent → present; `deleted` means present → absent; `changed` includes creation, deletion, replacement, and metadata changes. Paths are relative to the session working directory; absolute paths and `~/` also work. In direct commands, separate the path from the task with ` -- `; spaces in paths need no quotes. Paths are not globs, and directories are not watched recursively.
-- **Pi tools:** match the exact tool name, optionally an outcome and a case-sensitive literal substring in a text output block. Success/error follows the tool's reported error status, not an interpretation of its output. All matching completions in this session count, including nested tool calls; the `schedule` tool itself cannot be watched. A tool listener does not start the tool or observe terminal commands, external processes, or another session.
+- **Pi tools:** match the exact tool name, optionally an outcome and a case-sensitive literal substring in a text output block. Success/error follows the tool's reported error status, not an interpretation of its output. All matching completions in this session count, including nested tool calls; the `schedule` tool itself cannot be watched. This includes command completions reported by Pi's `bash` tool. A listener does not start tools or independently monitor external processes, and it does not observe commands run outside Pi tools or in another session.
 - **Safe execution:** only your saved task prompt runs, with normal Pi permissions. File contents and tool output do not become new instructions. Listening does not execute shell commands or call a model to evaluate conditions.
 
 For example, Pi can save an output-filtered listener with:
