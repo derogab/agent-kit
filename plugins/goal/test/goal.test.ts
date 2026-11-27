@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import type {
@@ -13,11 +13,14 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import goal from "../extensions/goal.ts";
 
 const DONE = "<goal>done</goal>";
 const BLOCKED = "<goal>blocked</goal>";
+const PAGE_LEFT = "\x1b[1;6D"; // Ctrl+Shift+Left and Ctrl+Shift+Right as sent by the terminal.
+const PAGE_RIGHT = "\x1b[1;6C";
+const archiveRoot = process.geteuid ? `/tmp/pi-goals-${process.geteuid()}` : join(tmpdir(), "pi-goals");
 const directories: string[] = [];
 after(() => directories.forEach((cwd) => rmSync(cwd, { recursive: true, force: true })));
 
@@ -35,10 +38,7 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
 	const tools = new Map<string, any>();
-	const shortcuts = new Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>();
-	const tui = { terminal: { rows: 30 }, requestRender() {} };
-	const theme = { fg: (_color: string, text: string) => text };
-	let expanded: any;
+	const shortcuts = new Map<KeyId, { handler: (ctx: ExtensionContext) => void | Promise<void> }>();
 	const sent: string[] = [];
 	const notifications: Array<{ message: string; level: string }> = [];
 	const widgets = new Map<string, any>();
@@ -57,10 +57,6 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 		hasPendingMessages: () => pending,
 		abort: () => { aborts++; },
 		ui: {
-			custom: (factory: any, options: any) => new Promise<void>((resolve) => {
-				assert.equal(options.overlay, true);
-				expanded = factory(tui, theme, getKeybindings(), () => { expanded = undefined; resolve(); });
-			}),
 			notify: (message: string, level: string) => notifications.push({ message, level }),
 			setWidget: (key: string, value: any) => widgets.set(key, value),
 			select: async () => assert.fail("Goals must not require review dialogs."),
@@ -71,7 +67,7 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 		on: (event: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
-		registerShortcut: (key: string, shortcut: any) => shortcuts.set(key, shortcut),
+		registerShortcut: (key: KeyId, shortcut: any) => shortcuts.set(key, shortcut),
 		sendUserMessage: (text: string) => {
 			sent.push(text);
 			void handlers.get("agent_start")!({ type: "agent_start" }, ctx);
@@ -86,7 +82,10 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 	});
 	const directory = join(cwd, ".pi", "goals", "sessions", `session-${encodeURIComponent(sessionId)}`);
 	const current = join(directory, "current.json");
-	const archiveDir = join(directory, "archive");
+	const workspace = createHash("sha256").update(fs.realpathSync(cwd)).digest("hex");
+	const workspaceArchive = join(archiveRoot, workspace);
+	if (!options.cwd) directories.push(workspaceArchive);
+	const archiveDir = join(workspaceArchive, `session-${encodeURIComponent(sessionId)}`);
 	const archived = () => existsSync(archiveDir) ? readdirSync(archiveDir).filter((name) => name.endsWith(".json")).sort() : [];
 	const render = (width = 100, theme = { fg: (_color: string, text: string) => text }): string[] => {
 		const widget = widgets.get("goal");
@@ -94,16 +93,16 @@ const setup = (options: { cwd?: string; sessionId?: string; mode?: string; bus?:
 	};
 	return {
 		ctx, api, registry, handlers, commands, tools, shortcuts, sent, notifications, widgets, emit, boundary,
-		cwd, sessionId, directory, current, archiveDir, archived, render, tui,
+		cwd, sessionId, directory, current, archiveDir, archived, render,
 		reply: async (text = "The blocker is resolved.", source = "interactive", images?: any[]) => {
 			await emit("input", { text, source, images });
 			const result = await emit("before_agent_start", { prompt: text, messageType: "user", images });
 			await emit("agent_start");
 			return result;
 		},
-		expand: () => shortcuts.get("ctrl+shift+t")!.handler(ctx),
-		renderExpanded: (width = 100): string[] => expanded?.render(width) ?? [],
-		inputExpanded: (data: string) => expanded?.handleInput(data),
+		press: (data: string) => {
+			for (const [key, shortcut] of shortcuts) if (matchesKey(data, key)) return shortcut.handler(ctx);
+		},
 		state: () => JSON.parse(readFileSync(current, "utf8")),
 		archive: (index = 0) => JSON.parse(readFileSync(join(archiveDir, archived()[index]), "utf8")),
 		run: (args: string) => commands.get("goal")!.handler(args, ctx),
@@ -131,7 +130,7 @@ test("duplicate install paths register only one tool, command set and lifecycle"
 		assert.equal(second.commands.size, 0);
 		assert.equal(second.tools.size, 0);
 		assert.equal(second.shortcuts.size, 0);
-		assert.deepEqual([...first.shortcuts.keys()], ["ctrl+shift+t"]);
+		assert.deepEqual([...first.shortcuts.keys()], ["ctrl+shift+left", "ctrl+shift+right"]);
 		await first.emit("session_start");
 		await first.run("Fix the tests.");
 		await first.update(tasks);
@@ -181,6 +180,7 @@ test("does nothing and creates no files without an explicit goal", async () => {
 	for (const name of ["goal-pause", "goal-resume", "goal-stop"]) await h.command(name);
 	assert.equal(h.sent.length, 0);
 	assert.equal(existsSync(h.directory), false);
+	assert.equal(existsSync(h.archiveDir), false);
 	assert.deepEqual(h.render(), []);
 	await assert.rejects(h.update(tasks), /No running goal/);
 });
@@ -290,22 +290,22 @@ test("large checklists have a bounded preview without losing saved or resumed ta
 		const h = setup({ mode });
 		await h.run("Complete every task.");
 		let checklist: Array<{ text: string; done: boolean }> = [];
-		for (const count of [0, 10, 11, 100]) {
+		for (const count of [0, 5, 6, 10, 11, 100]) {
 			checklist = Array.from({ length: count }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
 			await h.update(checklist);
 			const lines = h.render();
-			assert.equal(lines.length, (mode === "tui" ? 5 : 3) + Math.min(count, 10) + Number(count > 10));
-			assert.equal(lines.filter((line) => /[·✓] Task /.test(line)).length, Math.min(count, 10));
-			assert.equal(lines.some((line) => line.includes(" more")), count > 10);
-			if (count > 10) assert.ok(lines.some((line) => line.includes(`… ${count - 10} more`)));
-			assert.ok(!lines.some((line) => line.includes("Task 11")));
+			assert.equal(lines.length, (mode === "tui" ? 5 : 3) + Math.min(count, 5) + Number(count > 5));
+			assert.equal(lines.filter((line) => /[·✓] Task /.test(line)).length, Math.min(count, 5));
+			const hint = mode === "tui" ? `Page 1/${Math.ceil(count / 5)} · Ctrl+Shift+←/→` : `… ${count - 5} more`;
+			assert.equal(lines.some((line) => line.includes(hint)), count > 5);
+			assert.ok(!lines.some((line) => line.includes("Task 6")));
 			assert.deepEqual(h.state().tasks, checklist);
 			assert.ok((await h.boundary()).entries[0].content.includes(JSON.stringify(checklist)));
 		}
 		await h.command("goal-pause");
 		const next = setup({ cwd: h.cwd, sessionId: h.sessionId, mode });
 		await next.emit("session_start");
-		assert.ok(next.render().some((line) => line.includes("… 90 more")));
+		assert.ok(next.render().some((line) => line.includes(mode === "tui" ? "Page 1/20" : "… 95 more")));
 		await next.command("goal-resume");
 		assert.ok(next.sent[0].includes(JSON.stringify(checklist)));
 		await next.boundary([assistant(DONE)]);
@@ -317,125 +317,85 @@ test("large checklists have a bounded preview without losing saved or resumed ta
 	}
 });
 
-test("Ctrl+Shift+T expands all tasks and toggles back without changing goal state", async () => {
+test("modified arrows page through every task in the goal box without changing saved state", async () => {
 	const h = setup();
-	await h.expand();
-	assert.deepEqual(h.renderExpanded(), []);
+	await h.press(PAGE_RIGHT);
+	assert.deepEqual(h.render(), []);
 	assert.equal(existsSync(h.directory), false);
 	await h.run("Complete every task.");
-	for (const count of [0, 10]) {
-		await h.update(Array.from({ length: count }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
-		await h.expand();
-		assert.deepEqual(h.renderExpanded(), []);
-	}
-	const checklist = Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
+	const checklist = Array.from({ length: 13 }, (_, i) => ({ text: `Task ${i + 1}`, done: i % 2 === 0 }));
 	await h.update(checklist);
-	assert.match(h.render().join("\n"), /… 1 more · Ctrl\+Shift\+T: expand/);
 	const before = readFileSync(h.current, "utf8");
-	const opening = h.expand();
-	assert.equal(h.renderExpanded().filter((line) => /[·✓] Task /.test(line)).length, 11);
-	assert.match(h.renderExpanded().join("\n"), /✓ Task 11/);
-	await h.update(checklist.map((task) => ({ ...task, done: true })));
-	assert.match(h.renderExpanded().join("\n"), /11\/11 tasks done/);
-	assert.match(h.renderExpanded().join("\n"), /✓ Task 2/);
-	await h.update(checklist);
-	await h.expand();
-	await opening;
-	assert.deepEqual(h.renderExpanded(), []);
+	const checkPage = (page: number) => {
+		const lines = h.render();
+		assert.ok(lines.some((line) => line.includes(`Page ${page}/3 · Ctrl+Shift+←/→`)));
+		const rows = lines.flatMap((line) => line.match(/[✓·] Task \d+/g) ?? []);
+		assert.deepEqual(rows, checklist.slice((page - 1) * 5, page * 5).map((t) => `${t.done ? "✓" : "·"} ${t.text}`));
+	};
+	checkPage(1);
+	for (const [key, page] of [[PAGE_LEFT, 1], ["\x1b[C", 1], [PAGE_RIGHT, 2], [PAGE_RIGHT, 3],
+		[PAGE_RIGHT, 3], [PAGE_LEFT, 2], [PAGE_LEFT, 1]] as const) {
+		await h.press(key);
+		checkPage(page);
+	}
 	assert.equal(readFileSync(h.current, "utf8"), before);
 	assert.equal(h.sent.length, 1);
 	assert.equal(h.aborts(), 0);
 });
 
-test("expanded checklists scroll to every task, resize safely and collapse on Escape", async () => {
+test("live updates retain the current page or clamp it when the checklist shrinks", async () => {
 	const h = setup();
-	await h.run("Complete every task.");
-	await h.update(Array.from({ length: 100 }, (_, i) => ({ text: `Task ${i + 1} 界 👩‍💻\ncheck`, done: false })));
-	const opening = h.expand();
-	const seen = new Set<string>();
-	for (let i = 0; i < 100; i++) {
-		const lines = h.renderExpanded();
-		assert.ok(lines.length < h.tui.terminal.rows);
-		for (const line of lines) {
-			const task = line.match(/Task (\d+)/);
-			if (task) seen.add(task[1]);
-		}
-		h.inputExpanded("\x1b[B");
-	}
-	assert.equal(seen.size, 100);
-	for (const rows of [12, 24, 40]) {
-		h.tui.terminal.rows = rows;
-		for (const width of [0, 1, 4, 20, 100]) {
-			const lines = h.renderExpanded(width);
-			assert.ok(lines.length < rows);
-			for (const line of lines) assert.ok(visibleWidth(line) <= width);
-		}
-	}
-	h.inputExpanded("\x1b[A");
-	h.renderExpanded();
-	h.inputExpanded("\x1b[5~");
-	assert.match(h.renderExpanded().join("\n"), /Task 68 /);
-	h.inputExpanded("\x1b[6~");
-	assert.match(h.renderExpanded().join("\n"), /Task 100 /);
-	await h.update(tasks);
-	assert.match(h.renderExpanded().join("\n"), /✓ Fix tests/);
-	assert.match(h.renderExpanded().join("\n"), /· Run full suite/);
+	await h.run("Track progress.");
+	const checklist = Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false }));
+	await h.update(checklist);
+	await h.press(PAGE_RIGHT);
+	await h.press(PAGE_RIGHT);
+	await h.update(checklist.map((task) => ({ ...task, done: true })));
+	assert.match(h.render().join("\n"), /✓ Task 11/);
+	await h.update(checklist.slice(0, 6));
+	assert.match(h.render().join("\n"), /Page 2\/2/);
+	assert.match(h.render().join("\n"), /· Task 6/);
 	await h.update([]);
-	assert.match(h.renderExpanded().join("\n"), /No tasks/);
-	h.inputExpanded("\x1b");
-	await opening;
-	assert.deepEqual(h.renderExpanded(), []);
-	assert.equal(h.state().status, "running");
-	assert.equal(h.aborts(), 0);
+	assert.doesNotMatch(h.render().join("\n"), /Task \d|Page|Ctrl\+Shift/);
+	await h.update(checklist);
+	assert.match(h.render().join("\n"), /Page 1\/3/);
 });
 
-test("expanded checklists work for paused and archived goals and close on session changes", async () => {
-	for (const event of ["session_start", "session_tree", "session_shutdown"]) {
-		const h = setup();
-		await h.run("Complete every task.");
-		const checklist = Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false }));
-		await h.update(checklist);
-		await h.command("goal-pause");
-		let opening = h.expand();
-		assert.match(h.renderExpanded().join("\n"), /goal · paused/);
-		h.inputExpanded("\x1b[116;6u"); // Kitty Ctrl+Shift+T.
-		await opening;
-		assert.deepEqual(h.renderExpanded(), []);
-		await h.emit("agent_settled");
-		await h.command("goal-resume");
-		await h.boundary([assistant(DONE)]);
-		opening = h.expand();
-		assert.match(h.renderExpanded().join("\n"), /goal · done/);
-		assert.match(h.renderExpanded().join("\n"), /✓ Task 11/);
-		await h.emit(event);
-		await opening;
-		assert.deepEqual(h.renderExpanded(), []);
-		assert.deepEqual(h.archive().tasks, checklist.map((task) => ({ ...task, done: true })));
-	}
-});
-
-test("completion closes an open expanded checklist", async () => {
+test("blocked, paused and stopped goals can be paged; a new goal starts on page one", async () => {
 	const h = setup();
-	await h.run("Complete every task.");
-	await h.update(Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
-	const opening = h.expand();
-	assert.match(h.renderExpanded().join("\n"), /Task 11/);
-	await h.boundary([assistant(`Completed and verified all tasks.\n${DONE}`)]);
-	assert.deepEqual(h.renderExpanded(), []);
+	await h.run("First goal.");
+	const checklist = Array.from({ length: 6 }, (_, i) => ({ text: `Task ${i + 1}`, done: false }));
+	await h.update(checklist);
+	await h.boundary([assistant(BLOCKED)]);
+	await h.emit("agent_settled");
+	await h.press(PAGE_RIGHT);
+	assert.match(h.render().join("\n"), /goal · blocked[\s\S]*Page 2\/2/);
+	await h.command("goal-pause");
+	await h.press(PAGE_LEFT);
+	assert.match(h.render().join("\n"), /goal · paused[\s\S]*Page 1\/2/);
+	await h.command("goal-stop");
+	await h.press(PAGE_RIGHT);
+	assert.match(h.render().join("\n"), /stopped · archived[\s\S]*Page 2\/2/);
+	assert.deepEqual(h.archive().tasks, checklist);
+	await h.run("Second goal.");
+	await h.update(checklist);
+	assert.match(h.render().join("\n"), /Page 1\/2/);
+	await h.press(PAGE_RIGHT);
+	await h.boundary([assistant(DONE)]);
+	await h.press(PAGE_LEFT);
 	assert.deepEqual(h.render(), []);
-	await opening;
 });
 
 for (const mode of ["rpc", "json"]) {
-	test(`expansion is terminal-only and leaves ${mode} goal behavior unchanged`, async () => {
+	test(`paging is terminal-only and leaves ${mode} goal behavior unchanged`, async () => {
 		const h = setup({ mode });
 		await h.run("Complete every task.");
-		await h.update(Array.from({ length: 11 }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
-		const before = h.state();
-		await h.expand();
-		assert.deepEqual(h.renderExpanded(), []);
-		assert.deepEqual(h.state(), before);
-		assert.ok(!h.render().join("\n").includes("Ctrl+Shift+T"));
+		await h.update(Array.from({ length: 6 }, (_, i) => ({ text: `Task ${i + 1}`, done: false })));
+		const before = h.render();
+		await h.press(PAGE_RIGHT);
+		assert.deepEqual(h.render(), before);
+		assert.doesNotMatch(before.join("\n"), /Ctrl\+Shift|Page/);
+		assert.equal(h.state().tasks.length, 6);
 	});
 }
 
@@ -953,7 +913,9 @@ test("send failures pause the goal", async () => {
 });
 
 test("invalid saved state is reported and never overwritten", async () => {
-	for (const value of ["{broken", "null", '{"instruction":"hello"}']) {
+	for (const value of ["{broken", "null", '{"instruction":"hello"}', JSON.stringify({
+		instruction: "Invalid destination", status: "done", round: 1, tasks: [], archiveId: "../escape",
+	})]) {
 		const h = setup();
 		mkdirSync(h.directory, { recursive: true });
 		writeFileSync(h.current, value);
@@ -971,12 +933,14 @@ for (const status of ["done", "stopped"]) {
 		await h.run("Fix the tests.");
 		await h.update(tasks);
 		// Make the archive destination unwritable without depending on chmod or user privileges.
+		mkdirSync(dirname(h.archiveDir), { recursive: true, mode: 0o700 });
 		writeFileSync(h.archiveDir, "not a directory");
 		if (status === "done") await h.boundary([assistant(DONE)]);
 		else await h.command("goal-stop");
 		assert.equal(await h.boundary(), undefined);
 		const expected = { instruction: "Fix the tests.", status, round: 1, tasks: status === "done" ? completedTasks : tasks };
-		assert.deepEqual(h.state(), expected);
+		const { archiveId, ...pending } = h.state();
+		assert.deepEqual(pending, expected);
 		assert.equal(h.notifications.at(-1)!.level, "error");
 		assert.ok(!h.notifications.some(({ message }) => /Goal reached and archived|Goal stopped and archived/.test(message)));
 		assert.match(h.render().join("\n"), /archive pending/);
@@ -984,7 +948,7 @@ for (const status of ["done", "stopped"]) {
 		rmSync(h.archiveDir);
 		await h.command("goal-status");
 		assert.equal(existsSync(h.current), false);
-		assert.equal(h.archived().length, 1);
+		assert.deepEqual(h.archived(), [`${archiveId}.json`]);
 		assert.deepEqual(h.archive(), expected);
 		if (status === "done") assert.deepEqual(h.render(), []);
 		else assert.match(h.render().join("\n"), /stopped · archived/);
@@ -1073,13 +1037,79 @@ test("queued progress cannot recreate a stopped goal or modify a replacement", a
 
 test("malformed archives are reported and preserved without blocking valid goals", async () => {
 	const h = setup();
-	mkdirSync(h.archiveDir, { recursive: true });
+	mkdirSync(h.archiveDir, { recursive: true, mode: 0o700 });
 	const file = join(h.archiveDir, "broken.json");
 	writeFileSync(file, "broken");
 	await h.run("Fix the tests.");
 	assert.equal(h.sent.length, 1);
 	assert.equal(readFileSync(file, "utf8"), "broken");
 	assert.equal(h.notifications[0].level, "warning");
+});
+
+test("old session archives remain readable; new goals stay out of the workspace archive", async () => {
+	const h = setup();
+	const legacyDir = join(h.directory, "archive");
+	mkdirSync(legacyDir, { recursive: true });
+	const old = JSON.stringify({ instruction: "Local history.", status: "stopped", round: 1, tasks });
+	writeFileSync(join(legacyDir, "old.json"), old);
+	await h.command("goal-status");
+	assert.match(h.notifications.at(-1)!.message, /stopped, archived.*Local history/);
+	await h.run("New history.");
+	await h.command("goal-stop");
+	assert.equal(h.archive().instruction, "New history.");
+	await h.command("goal-status");
+	assert.match(h.notifications.at(-1)!.message, /stopped, archived.*New history/);
+	assert.deepEqual(readdirSync(legacyDir), ["old.json"]);
+	assert.equal(readFileSync(join(legacyDir, "old.json"), "utf8"), old);
+
+	const other = setup({ sessionId: h.sessionId });
+	await other.command("goal-status");
+	assert.match(other.notifications.at(-1)!.message, /No active goal/);
+});
+
+test("a non-private archive root is refused without losing the goal", { skip: !process.geteuid }, async (t) => {
+	const h = setup();
+	await h.run("Keep this private.");
+	const unsafe = fs.statSync(h.directory);
+	unsafe.mode |= 0o077;
+	const lstat = fs.lstatSync;
+	t.mock.method(fs, "lstatSync", (...args: Parameters<typeof lstat>) => args[0] === archiveRoot ? unsafe : lstat(...args));
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await h.command("goal-stop");
+	assert.match(h.notifications.at(-1)!.message, /Expected a private goal archive directory/);
+	assert.equal(h.state().status, "stopped");
+	assert.equal(existsSync(h.archiveDir), false);
+});
+
+test("archiving across filesystems retries an interrupted source removal without duplicating history", async (t) => {
+	const h = setup();
+	await h.run("Move this goal.");
+	const rename = fs.renameSync;
+	t.mock.method(fs, "renameSync", (from: string, to: string) => {
+		if (dirname(from) !== dirname(to)) throw Object.assign(new Error("Cross-device rename"), { code: "EXDEV" });
+		rename(from, to);
+	});
+	const remove = fs.rmSync;
+	t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => {
+		if (args[0] === h.current) throw new Error("Source removal failed");
+		remove(...args);
+	});
+	syncBuiltinESMExports();
+	const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
+	t.after(restore);
+	await h.command("goal-stop");
+	assert.match(h.notifications.at(-1)!.message, /Source removal failed/);
+	assert.equal(h.state().status, "stopped");
+	const files = h.archived();
+	assert.equal(files.length, 1);
+	restore();
+	const next = setup({ cwd: h.cwd, sessionId: h.sessionId });
+	await next.emit("session_start");
+	assert.deepEqual(next.archived(), files);
+	assert.equal(next.archive().instruction, "Move this goal.");
+	assert.deepEqual(readdirSync(h.directory), []);
+	assert.equal(next.sent.length, 0);
 });
 
 test("different sessions run independent goals in the same directory", async () => {
